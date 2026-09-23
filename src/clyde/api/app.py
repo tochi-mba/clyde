@@ -22,6 +22,7 @@ from clyde.cli.locate import ClaudeNotFoundError, find
 from clyde.cli.run import ClaudeFailedError, ClaudeTimeoutError, run
 from clyde.cli.sandbox import Sandbox
 from clyde.core.config import Settings, load_settings
+from clyde.core.logs import configure as configure_logs
 from clyde.openai import translate
 from clyde.openai.errors import Problem, from_error
 from clyde.openai.service import PROBE_PROMPT, Runtime, tools_from_init
@@ -94,6 +95,7 @@ async def build_runtime(settings: Settings) -> Runtime:
 def create_app(settings: Settings | None = None) -> FastAPI:
     """The app. `settings` is injected in tests; production reads the environment."""
     config = settings or load_settings()
+    configure_logs(config.log_level, config.log_format)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
