@@ -1,4 +1,13 @@
+# clyde is not a family service, so it does not use the family's reusable workflow.
+#
+# That workflow checks a keyring-verifying service with a row in `repos.txt` and a container
+# image. clyde is a localhost tool that shells out to a CLI: no auth, no keyring, no image.
+# Pointing it at `service.yml` failed `Family parity` and `Docker image` while every check
+# that actually tests the code passed -- a red run that proved nothing.
+#
+# The quality bar is the same. The assumptions are not.
 name: CI
+
 on:
   push:
     branches: ["**"]
@@ -7,7 +16,39 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+
 jobs:
-  service:
-    uses: tochi-mba/LUCY-assistant/.github/workflows/service.yml@v1
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is not optional here. clyde spawns a process and reads its stdout, and on
+        # Windows the binary it spawns is `claude.CMD` -- a different path through `shutil.which`
+        # and through `create_subprocess_exec` than any POSIX runner exercises.
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Sync (frozen lock)
+        run: uv sync --frozen --group dev
+      - name: Format
+        run: uv run python -m ruff format --check .
+      - name: Lint
+        run: uv run python -m ruff check .
+      - name: Types
+        run: uv run python -m mypy
+      - name: Import contracts
+        run: >
+          uv run python -c "from importlinter import configuration;
+          from importlinter.application.use_cases import lint_imports;
+          configuration.configure();
+          raise SystemExit(0 if lint_imports(config_filename=None, is_debug_mode=False,
+          verbose=False) else 1)"
+      # `-m live` is excluded by `addopts`, so nothing here spawns a real `claude`: those tests
+      # need a subscription login and cost money, and CI has neither.
+      - name: Tests and coverage
+        run: uv run python -m pytest --cov --cov-report=term-missing
