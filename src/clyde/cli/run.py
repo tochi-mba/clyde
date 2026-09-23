@@ -128,6 +128,32 @@ def without_tool_call_tags(text: str) -> str:
     return stripped or text
 
 
+ANY_TOOL_CALL = re.compile(r"</?(?:\w+:)?(?:invoke|function_calls|parameter)\b", re.IGNORECASE)
+"""Tool-call syntax anywhere in a reply, in any of the shapes it has arrived in."""
+
+
+def is_mangled_call(text: str) -> bool:
+    """Whether a reply is a tool call the CLI could not make.
+
+    There are no tools in this conversation -- `argv.build` disallows every one the binary
+    reported -- so a reply carrying `<invoke>` is not an answer. It is the model reaching for
+    a channel that is not there, and whatever it meant to say is in a shape no caller can
+    read. `without_tool_call_tags` recovers the two shapes where the tags are only wrapping;
+    this catches the rest, where the syntax is tangled through the text:
+
+        <parameter name="op">notes.search</parameter>
+        </invoke>
+        ```
+        Wait, correcting format: here is the JSON object.
+        {"steps":[...]}
+
+    Measured at roughly one turn in three against a real caller, so it is worth a retry
+    rather than a shrug. The cost of a false positive -- somebody asking clyde to explain
+    Claude Code's own syntax -- is one wasted call before the same answer is returned anyway.
+    """
+    return bool(ANY_TOOL_CALL.search(text))
+
+
 def parse(stdout: str) -> Outcome:
     """The CLI's `--output-format json` object, as an :class:`Outcome`.
 
@@ -211,6 +237,7 @@ async def run(
 
 
 __all__ = [
+    "ANY_TOOL_CALL",
     "SIGTERM_EXIT",
     "STDERR_KEPT",
     "TOOL_CALL_TAG",
@@ -218,6 +245,7 @@ __all__ = [
     "ClaudeTimeoutError",
     "Outcome",
     "first_line",
+    "is_mangled_call",
     "parse",
     "run",
     "without_tool_call_tags",

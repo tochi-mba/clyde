@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from clyde.cli import argv as argv_mod
 from clyde.cli import locate
-from clyde.cli.run import Outcome, run
+from clyde.cli.run import Outcome, is_mangled_call, run
 from clyde.openai import translate
 
 if TYPE_CHECKING:
@@ -107,13 +107,23 @@ class Runtime:
                 "spilled" if fitted.system_file else ("folded" if call.system else "kept"),
             )
         self.sandbox.verify()
+        argv = argv_mod.build(fitted, binary=self.binary)
         try:
             async with self.limit:
+                outcome = await run(
+                    argv, stdin=fitted.prompt, cwd=self.sandbox.root, timeout=self.timeout
+                )
+                if not is_mangled_call(outcome.result):
+                    return outcome
+                # The model reached for a tool channel that is not there. Nothing about the
+                # request caused it -- the same request answers cleanly most of the time --
+                # so the useful response is to ask again rather than to hand a caller a reply
+                # in a shape it cannot read. Once, and only once: a second failure is a fact
+                # about this request, and hiding it behind a third attempt would only make it
+                # slower to find.
+                log.info("retrying: the reply was a tool call with no tool to make it")
                 return await run(
-                    argv_mod.build(fitted, binary=self.binary),
-                    stdin=fitted.prompt,
-                    cwd=self.sandbox.root,
-                    timeout=self.timeout,
+                    argv, stdin=fitted.prompt, cwd=self.sandbox.root, timeout=self.timeout
                 )
         finally:
             # A spilled prompt lives exactly as long as the process reading it. Leaving them
