@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
 import pytest
 
 from clyde.cli.run import Outcome
 from clyde.openai.translate import (
     CLOSING_LINE,
     CONVERSATION_OPEN,
+    DONE,
     finish_reason,
     render,
     schema_of,
+    stream_chunks,
     to_call,
     to_completion,
     usage_of,
@@ -205,3 +210,68 @@ def test_the_session_id_becomes_the_completion_id() -> None:
 
 def test_created_defaults_to_now() -> None:
     assert to_completion(outcome(), model="s")["created"] > 0
+
+
+# --- streaming ------------------------------------------------------------------------------
+
+
+def chunks(**kwargs: object) -> list[str]:
+    return stream_chunks(outcome(**kwargs), model="sonnet", now=1)
+
+
+def parsed(lines: list[str]) -> list[dict[str, Any]]:
+    """The JSON of every `data:` line except the sentinel, the way a reader sees them."""
+    out: list[dict[str, Any]] = []
+    for line in lines:
+        payload = line.removeprefix("data: ").strip()
+        if payload != DONE:
+            out.append(json.loads(payload))
+    return out
+
+
+def test_a_stream_is_three_chunks_and_a_sentinel() -> None:
+    lines = chunks(result="hello")
+    assert len(lines) == 4
+    assert lines[-1] == f"data: {DONE}\n\n"
+    assert all(line.startswith("data: ") and line.endswith("\n\n") for line in lines)
+
+
+def test_the_first_chunk_carries_the_whole_reply() -> None:
+    """Nothing here is incremental: `claude -p` hands back the reply in one piece, and
+    pretending otherwise would be a lie told in smaller pieces."""
+    first = parsed(chunks(result="hello there"))[0]
+    assert first["choices"][0]["delta"] == {"role": "assistant", "content": "hello there"}
+    assert "finish_reason" not in first["choices"][0]
+
+
+def test_the_second_chunk_carries_the_finish_reason() -> None:
+    second = parsed(chunks(result="hi"))[1]
+    assert second["choices"][0]["finish_reason"] == "stop"
+    assert second["choices"][0]["delta"] == {}
+
+
+def test_a_truncated_run_streams_its_finish_reason() -> None:
+    second = parsed(chunks(result="cut", subtype="error_max_turns"))[1]
+    assert second["choices"][0]["finish_reason"] == "length"
+
+
+def test_the_third_chunk_carries_usage_and_no_choices() -> None:
+    """A reader takes usage from whichever chunk has it; an empty `choices` keeps it from
+    also being read as another delta."""
+    third = parsed(chunks(result="hi", usage={"output_tokens": 4}))[2]
+    assert third["choices"] == []
+    assert third["usage"]["completion_tokens"] == 4
+
+
+def test_every_chunk_is_the_same_id_model_and_object() -> None:
+    events = parsed(chunks(result="hi", session_id="abc", model="claude-opus-5-5"))
+    assert {e["id"] for e in events} == {"chatcmpl-abc"}
+    assert {e["model"] for e in events} == {"claude-opus-5-5"}
+    assert {e["object"] for e in events} == {"chat.completion.chunk"}
+
+
+def test_structured_output_streams_as_one_string_delta() -> None:
+    """The same trap as the blocking path: a plan has to arrive as text a reader can parse."""
+    plan = '{"steps":[{"id":"a","op":"notes.search"}]}'
+    first = parsed(chunks(result=plan))[0]
+    assert first["choices"][0]["delta"]["content"] == plan

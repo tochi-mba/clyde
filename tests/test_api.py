@@ -116,12 +116,23 @@ async def test_models_lists_the_aliases(tmp_path: Any, monkeypatch: pytest.Monke
 # --- refusals, before anything is spawned --------------------------------------------------------
 
 
-async def test_streaming_is_refused_rather_than_ignored(
+async def test_streaming_is_served_as_server_sent_events(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    response = await call(runtime(tmp_path), monkeypatch, messages=[], stream=True)
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "streaming_unsupported"
+    """Refusing `stream: true` refused Lucy entirely: it attaches a chunk projector to every
+    turn, so it never asks for the blocking path. Found by running it, not by reading it."""
+    live = runtime(tmp_path)
+
+    async def complete(body: dict[str, Any]) -> Outcome:
+        return Outcome(result="hello", session_id="abc")
+
+    monkeypatch.setattr(live, "complete", complete)
+    response = await call(live, monkeypatch, messages=[], stream=True)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert '"content":"hello"' in body
+    assert body.rstrip().endswith("data: [DONE]")
 
 
 async def test_tools_are_refused_rather_than_dropped(
@@ -217,3 +228,22 @@ async def test_each_failure_becomes_its_own_status(
 
     monkeypatch.setattr(live, "complete", complete)
     assert (await call(live, monkeypatch)).status_code == status
+
+
+async def test_a_body_that_is_not_json_is_the_callers_fault(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It used to escape the route and surface as `clyde failed: JSONDecodeError` -- a 500,
+    which tells a caller to retry something only they can fix."""
+    http, manager = await client(runtime(tmp_path), monkeypatch)
+    try:
+        response = await http.post(
+            "/v1/chat/completions",
+            content=b"{not json",
+            headers={"content-type": "application/json"},
+        )
+    finally:
+        await http.aclose()
+        await manager.__aexit__(None, None, None)
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request_error"
