@@ -22,7 +22,7 @@ from clyde.cli.run import (
     first_line,
     parse,
     run,
-    without_leading_tool_calls,
+    without_tool_call_tags,
 )
 
 CLI_JSON = {
@@ -209,59 +209,62 @@ def test_the_outcome_defaults_are_the_quiet_ones() -> None:
 # --- leaked tool-call syntax ------------------------------------------------------------------
 #
 # Claude Code emits `<invoke name="...">` when it decides to call something, and does so with
-# every tool disallowed, because a prompt full of named operations reads like a set of tools.
-# With no tool to match, the CLI hands the block through as part of the reply, and a caller
-# doing `json.loads` on the whole thing reads a perfectly good plan as prose.
+# every tool disallowed, because a prompt full of named operations reads exactly like a set of
+# tools. With no tool to match, the CLI hands the tags through as part of the reply. Both
+# shapes below came off a real run, a few turns apart.
 
-LEAKED = '<invoke name="none">\n</invoke>\n{"steps":[{"id":"ls","op":"workspace.list"}]}'
-
-
-def test_a_leaked_tool_call_comes_off_the_front() -> None:
-    assert without_leading_tool_calls(LEAKED) == '{"steps":[{"id":"ls","op":"workspace.list"}]}'
+IN_FRONT = '<invoke name="none">\n</invoke>\n{"steps":[{"id":"ls","op":"workspace.list"}]}'
+WRAPPED = '<invoke>\n{"steps":[{"id":"mem","op":"notes.search"}]}\n</invoke>'
 
 
-def test_a_bare_invoke_comes_off_too() -> None:
-    """The second sighting was `<invoke>` with no attributes at all."""
-    assert without_leading_tool_calls('\n<invoke>\n</invoke>\n{"a": 1}') == '{"a": 1}'
+def test_tags_in_front_of_the_reply_come_off() -> None:
+    assert without_tool_call_tags(IN_FRONT) == '{"steps":[{"id":"ls","op":"workspace.list"}]}'
 
 
-def test_a_function_calls_wrapper_comes_off() -> None:
-    text = (
-        "<function_calls>\n"
-        '<invoke name="x"><parameter name="p">1</parameter></invoke>\n'
-        "</function_calls>\n"
-        "hello"
-    )
-    assert without_leading_tool_calls(text) == "hello"
+def test_tags_wrapped_around_the_reply_come_off_without_taking_it_with_them() -> None:
+    """The shape that broke the first version of this. Matching `<invoke>...</invoke>` as a
+    block and deleting it was right for `IN_FRONT` and threw the whole reply away here."""
+    assert without_tool_call_tags(WRAPPED) == '{"steps":[{"id":"mem","op":"notes.search"}]}'
 
 
-def test_several_blocks_come_off() -> None:
-    assert without_leading_tool_calls("<invoke></invoke>\n<invoke></invoke>\nfinal") == "final"
+def test_a_nested_wrapper_comes_off() -> None:
+    text = '<function_calls>\n<invoke name="x">\n</invoke>\n</function_calls>\nhello'
+    assert without_tool_call_tags(text) == "hello"
 
 
-def test_a_namespaced_block_comes_off() -> None:
-    assert without_leading_tool_calls("<ns:invoke></ns:invoke>\nafter") == "after"
+def test_blank_lines_between_the_tags_and_the_reply_do_not_stop_it() -> None:
+    assert without_tool_call_tags('<invoke>\n\n{"a": 1}\n\n</invoke>\n') == '{"a": 1}'
 
 
-def test_a_block_in_the_middle_of_a_reply_is_left_alone() -> None:
-    """Somebody asking clyde to explain Claude Code's syntax gets exactly this, and a harness
-    that deleted it would be editing an answer it was not asked to edit."""
+def test_a_namespaced_tag_comes_off() -> None:
+    assert without_tool_call_tags("<ns:invoke>\nafter\n</ns:invoke>") == "after"
+
+
+def test_a_tag_inside_a_sentence_is_the_model_writing_about_it() -> None:
+    """Somebody asking clyde to explain Claude Code gets exactly this, and editing it would be
+    this harness rewriting an answer it was not asked to rewrite."""
     text = 'Here is the syntax: <invoke name="x"></invoke> use it like that.'
-    assert without_leading_tool_calls(text) == text
+    assert without_tool_call_tags(text) == text
 
 
-def test_a_reply_that_is_only_a_tool_call_is_kept_as_it_is() -> None:
-    """An empty reply is a worse answer than a strange one, and downstream it is
-    indistinguishable from the model saying nothing at all."""
-    assert without_leading_tool_calls("<invoke></invoke>") == "<invoke></invoke>"
+def test_a_tag_in_the_middle_is_left_where_it_is() -> None:
+    """Only the edges. A tag line in the middle is holding two halves of something apart, and
+    nothing here knows what."""
+    assert without_tool_call_tags("one\n<invoke>\ntwo") == "one\n<invoke>\ntwo"
+
+
+def test_a_reply_that_is_only_tags_is_kept_as_it_is() -> None:
+    """An empty reply is a worse answer than a strange one, and downstream it cannot be told
+    apart from the model saying nothing at all."""
+    assert without_tool_call_tags("<invoke>\n</invoke>") == "<invoke>\n</invoke>"
 
 
 def test_ordinary_prose_is_untouched() -> None:
-    assert without_leading_tool_calls("plain prose answer") == "plain prose answer"
+    assert without_tool_call_tags("plain prose answer") == "plain prose answer"
 
 
 def test_parse_strips_before_the_outcome_is_built() -> None:
     """Every caller reads `Outcome.result`, so the leak is undone once rather than in each of
     the two dialect paths that would otherwise each have to remember."""
-    outcome = parse(json.dumps({"result": LEAKED, "subtype": "success"}))
-    assert outcome.result == '{"steps":[{"id":"ls","op":"workspace.list"}]}'
+    outcome = parse(json.dumps({"result": WRAPPED, "subtype": "success"}))
+    assert outcome.result == '{"steps":[{"id":"mem","op":"notes.search"}]}'
