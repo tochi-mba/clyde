@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -79,6 +80,45 @@ class Outcome:
         return self.subtype.startswith("error_max_turns")
 
 
+LEADING_TOOL_CALL = re.compile(
+    r"\A\s*<(?:\w+:)?(invoke|function_calls)\b[^>]*>.*?</(?:\w+:)?\1\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+"""A tool-call block at the very front of a reply, which is where a leaked one appears.
+
+Claude Code is trained to emit `<invoke name="...">` when it decides to call something, and it
+does so with every tool disallowed, because a prompt full of named operations reads exactly
+like a set of tools. With no tool to match, the CLI hands the block through as part of the
+reply. Observed, twice:
+
+    <invoke name="none">
+    </invoke>
+    {"steps":[{"id":"ls","op":"workspace.list","input":{"path":"."}}]}
+
+That is a perfectly good structured reply with four lines in front of it, and a caller doing
+`json.loads` on the whole thing reads it as prose. Asking the model not to, in the prompt, did
+not stop it.
+
+Anchored at the start on purpose, and no further. A block in the middle of a reply is the model
+writing *about* the syntax -- somebody asking clyde to explain Claude Code would get exactly
+that -- and deleting it would be this harness editing an answer it was not asked to edit.
+"""
+
+
+def without_leading_tool_calls(text: str) -> str:
+    """`text` with any leaked tool-call blocks taken off the front.
+
+    Returns the original whenever stripping would leave nothing: an empty reply is a worse
+    answer than a strange one, and it is indistinguishable downstream from the model saying
+    nothing at all.
+    """
+    stripped = text
+    while match := LEADING_TOOL_CALL.match(stripped):
+        stripped = stripped[match.end() :]
+    stripped = stripped.strip()
+    return stripped or text
+
+
 def parse(stdout: str) -> Outcome:
     """The CLI's `--output-format json` object, as an :class:`Outcome`.
 
@@ -98,7 +138,7 @@ def parse(stdout: str) -> Outcome:
     models = payload.get("modelUsage")
     named = next(iter(models), "") if isinstance(models, dict) else ""
     return Outcome(
-        result=str(payload.get("result") or ""),
+        result=without_leading_tool_calls(str(payload.get("result") or "")),
         is_error=bool(payload.get("is_error")),
         subtype=str(payload.get("subtype") or "success"),
         stop_reason=str(payload.get("stop_reason") or "end_turn"),
@@ -162,6 +202,7 @@ async def run(
 
 
 __all__ = [
+    "LEADING_TOOL_CALL",
     "SIGTERM_EXIT",
     "STDERR_KEPT",
     "ClaudeFailedError",
@@ -170,4 +211,5 @@ __all__ = [
     "first_line",
     "parse",
     "run",
+    "without_leading_tool_calls",
 ]

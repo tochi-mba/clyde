@@ -22,6 +22,7 @@ from clyde.cli.run import (
     first_line,
     parse,
     run,
+    without_leading_tool_calls,
 )
 
 CLI_JSON = {
@@ -203,3 +204,64 @@ async def test_a_timeout_kills_the_child_and_raises(tmp_path: Path) -> None:
 def test_the_outcome_defaults_are_the_quiet_ones() -> None:
     outcome = Outcome(result="hi")
     assert (outcome.is_error, outcome.num_turns, outcome.cost_usd) == (False, 1, 0.0)
+
+
+# --- leaked tool-call syntax ------------------------------------------------------------------
+#
+# Claude Code emits `<invoke name="...">` when it decides to call something, and does so with
+# every tool disallowed, because a prompt full of named operations reads like a set of tools.
+# With no tool to match, the CLI hands the block through as part of the reply, and a caller
+# doing `json.loads` on the whole thing reads a perfectly good plan as prose.
+
+LEAKED = '<invoke name="none">\n</invoke>\n{"steps":[{"id":"ls","op":"workspace.list"}]}'
+
+
+def test_a_leaked_tool_call_comes_off_the_front() -> None:
+    assert without_leading_tool_calls(LEAKED) == '{"steps":[{"id":"ls","op":"workspace.list"}]}'
+
+
+def test_a_bare_invoke_comes_off_too() -> None:
+    """The second sighting was `<invoke>` with no attributes at all."""
+    assert without_leading_tool_calls('\n<invoke>\n</invoke>\n{"a": 1}') == '{"a": 1}'
+
+
+def test_a_function_calls_wrapper_comes_off() -> None:
+    text = (
+        "<function_calls>\n"
+        '<invoke name="x"><parameter name="p">1</parameter></invoke>\n'
+        "</function_calls>\n"
+        "hello"
+    )
+    assert without_leading_tool_calls(text) == "hello"
+
+
+def test_several_blocks_come_off() -> None:
+    assert without_leading_tool_calls("<invoke></invoke>\n<invoke></invoke>\nfinal") == "final"
+
+
+def test_a_namespaced_block_comes_off() -> None:
+    assert without_leading_tool_calls("<ns:invoke></ns:invoke>\nafter") == "after"
+
+
+def test_a_block_in_the_middle_of_a_reply_is_left_alone() -> None:
+    """Somebody asking clyde to explain Claude Code's syntax gets exactly this, and a harness
+    that deleted it would be editing an answer it was not asked to edit."""
+    text = 'Here is the syntax: <invoke name="x"></invoke> use it like that.'
+    assert without_leading_tool_calls(text) == text
+
+
+def test_a_reply_that_is_only_a_tool_call_is_kept_as_it_is() -> None:
+    """An empty reply is a worse answer than a strange one, and downstream it is
+    indistinguishable from the model saying nothing at all."""
+    assert without_leading_tool_calls("<invoke></invoke>") == "<invoke></invoke>"
+
+
+def test_ordinary_prose_is_untouched() -> None:
+    assert without_leading_tool_calls("plain prose answer") == "plain prose answer"
+
+
+def test_parse_strips_before_the_outcome_is_built() -> None:
+    """Every caller reads `Outcome.result`, so the leak is undone once rather than in each of
+    the two dialect paths that would otherwise each have to remember."""
+    outcome = parse(json.dumps({"result": LEAKED, "subtype": "success"}))
+    assert outcome.result == '{"steps":[{"id":"ls","op":"workspace.list"}]}'
