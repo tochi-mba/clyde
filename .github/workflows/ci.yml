@@ -1,0 +1,13 @@
+name: CI
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  service:
+    uses: tochi-mba/LUCY-assistant/.github/workflows/service.yml@v1
