@@ -57,6 +57,11 @@ def through_shim(path: str) -> str:
     The shim's last line is the quoted path to the real binary followed by `%*`. Anything that
     does not look like that is returned untouched: a shim this cannot read still runs, just
     with cmd's shorter command line, which is the behaviour before this existed.
+
+    Backslashes are turned into forward slashes before the path is built. Windows accepts
+    both, and it means this function -- which is about a Windows artifact -- can be read and
+    tested on a Linux runner, where `\\` is an ordinary character in a filename rather than a
+    separator, and `Path("/tmp/x\\real.exe")` is one file that does not exist.
     """
     if not path.lower().endswith(SHIM_SUFFIXES):
         return path
@@ -69,7 +74,8 @@ def through_shim(path: str) -> str:
         if not stripped.startswith('"'):
             continue
         quoted = stripped[1:].split('"', 1)[0]
-        resolved = Path(quoted.replace("%dp0%", str(Path(path).parent)))
+        here = str(Path(path).parent).replace("\\", "/")
+        resolved = Path(quoted.replace("%dp0%", here).replace("\\", "/"))
         if resolved.is_file():
             return str(resolved)
     return path
