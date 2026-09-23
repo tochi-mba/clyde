@@ -268,3 +268,11 @@ def test_the_schema_is_named_right_next_to_the_words_asking_for_it() -> None:
     call = Call(prompt="do the thing", json_schema=huge(ARGV_CEILING))
     fitted = fit(call, binary=BINARY)
     assert fitted.prompt.endswith(json.dumps(call.json_schema, separators=(",", ":")))
+
+
+def test_the_schema_in_words_forbids_tool_call_syntax() -> None:
+    """Claude Code emits `<invoke name="...">` when it decides to call something, even with
+    every tool disallowed -- a schema full of named operations reads like a set of tools. Four
+    lines of it in front of a perfectly good plan made the plan parse as nothing."""
+    assert "<invoke>" in SCHEMA_IN_WORDS
+    assert "no tools in this conversation" in SCHEMA_IN_WORDS

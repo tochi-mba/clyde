@@ -65,7 +65,11 @@ SCHEMA_IN_WORDS = (
     "\n\nWhile you still need something you do not have, reply with one JSON object and nothing"
     " else -- no prose around it, no code fence -- conforming to this JSON Schema. When you"
     " have everything you need and the only thing left is to answer, write the answer as"
-    " ordinary prose instead, with no JSON in it at all. That is how a reply ends.\n"
+    " ordinary prose instead, with no JSON in it at all. That is how a reply ends."
+    "\n\nWhatever that schema describes, it is not a set of tools you can call. You have no"
+    " tools in this conversation. Never emit tool-call syntax -- no <invoke> or"
+    " <function_calls> blocks -- and nothing at all outside the JSON object. Naming"
+    " something in the JSON is the only way it runs.\n"
 )
 """How a schema is asked for when it is too large to pass as a flag.
 
@@ -83,6 +87,19 @@ guarantee, and this is the part of the request that says when to stop making it.
 
 The fence is asked about twice for a reason: told once, the model wrapped its JSON in ```json
 anyway, and a caller doing `json.loads` on the whole reply read that as prose.
+
+The paragraph about tool syntax is here for the same reason and is just as specific to this
+harness. Claude Code is trained to emit `<invoke name="...">` when it decides to call
+something, and it does so even with every tool disallowed, because a schema full of named
+operations reads exactly like a set of tools. Observed: a reply of
+
+    <invoke name="none">
+    </invoke>
+    {"steps":[{"id":"ls","op":"workspace.list","input":{"path":"."}}]}
+
+which is a perfectly good plan with four lines in front of it, so it parsed as nothing, and a
+caller that ends its loop on "not JSON" ended -- showing the person the wire format it had
+just failed to read.
 """
 
 
