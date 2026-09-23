@@ -62,11 +62,28 @@ quoting the OS adds around each argument.
 """
 
 SCHEMA_IN_WORDS = (
-    "\n\nReply with JSON only -- no prose, no code fence -- conforming to this JSON Schema:\n"
+    "\n\nWhile you still need something you do not have, reply with one JSON object and nothing"
+    " else -- no prose around it, no code fence -- conforming to this JSON Schema. When you"
+    " have everything you need and the only thing left is to answer, write the answer as"
+    " ordinary prose instead, with no JSON in it at all. That is how a reply ends.\n"
 )
-"""How a schema is asked for when it is too large to pass as a flag. The reply is then text
-that happens to be JSON rather than JSON the CLI validated, which is what a caller asking for
-`json_object` already expects."""
+"""How a schema is asked for when it is too large to pass as a flag.
+
+The last two sentences are the whole file's most load-bearing text, and they are here rather
+than in the caller's prompt because they are about *this harness* rather than about that
+caller. Claude Code offers no tools in `-p` mode, so a caller reaching it through a schema
+like this is using JSON as its tool-call channel and prose as its answer channel. Callers that
+reach a model through a vendor SDK never need saying this: `tool_use` and `text` are different
+reply shapes there, and the provider reports which one it sent.
+
+Measured. Without them, the first real caller ever pointed at clyde re-emitted the same plan
+eight rounds running, then twelve, and never answered -- because "reply with JSON only" is an
+instruction a good model follows, forever. A schema in words is a request rather than a
+guarantee, and this is the part of the request that says when to stop making it.
+
+The fence is asked about twice for a reason: told once, the model wrapped its JSON in ```json
+anyway, and a caller doing `json.loads` on the whole reply read that as prose.
+"""
 
 
 @dataclass(frozen=True, slots=True)

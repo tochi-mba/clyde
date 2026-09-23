@@ -248,3 +248,23 @@ def test_length_counts_the_separators_between_arguments() -> None:
 
 def test_the_ceiling_leaves_room_under_the_windows_limit() -> None:
     assert ARGV_CEILING < 32767
+
+
+def test_the_schema_in_words_says_how_to_stop_asking() -> None:
+    """The sentence that ends a reply. Without it the first real caller re-emitted the same
+    plan eight rounds running: "reply with JSON only" is an instruction a good model follows
+    forever, and the caller's loop ends only on a reply that is not JSON."""
+    assert "prose" in SCHEMA_IN_WORDS
+    assert "That is how a reply ends." in SCHEMA_IN_WORDS
+
+
+def test_the_schema_in_words_asks_for_no_code_fence() -> None:
+    """Told once, the model fenced its JSON anyway, and a caller parsing the whole reply read
+    that as prose."""
+    assert "no code fence" in SCHEMA_IN_WORDS
+
+
+def test_the_schema_is_named_right_next_to_the_words_asking_for_it() -> None:
+    call = Call(prompt="do the thing", json_schema=huge(ARGV_CEILING))
+    fitted = fit(call, binary=BINARY)
+    assert fitted.prompt.endswith(json.dumps(call.json_schema, separators=(",", ":")))
