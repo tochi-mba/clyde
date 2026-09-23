@@ -288,3 +288,73 @@ async def test_a_call_that_already_fits_is_not_logged(
     with caplog.at_level("INFO", logger="clyde"):
         await live.complete({"messages": [{"role": "user", "content": "hi"}]})
     assert "fitted" not in caplog.text
+
+
+# --- a reply that is a tool call with no tool to make it ---------------------------------------
+#
+# Measured at roughly one turn in three against a real caller: the model reaches for a channel
+# that is not there, and what it meant to say arrives in a shape no caller can read. Two of the
+# three observed shapes are only tags wrapping the payload and are recovered by
+# `without_tool_call_tags`; this is the third, where the syntax is tangled through the text.
+
+TANGLED = (
+    '<parameter name="op">notes.search</parameter>\n'
+    "</invoke>\n"
+    "```\n"
+    "Wait, correcting format: here is the JSON object.\n"
+    '{"steps":[{"id":"mem","op":"notes.search"}]}'
+)
+
+
+def replies(*texts: str) -> tuple[Any, list[int]]:
+    """A stand-in for `run` that hands back each text in turn, and counts the calls."""
+    calls: list[int] = []
+
+    async def fake_run(
+        argv: Any,
+        *,
+        stdin: str,
+        cwd: Any,
+        timeout: float,  # noqa: ASYNC109 - mirrors the signature it stands in for
+    ) -> Outcome:
+        calls.append(1)
+        return Outcome(result=texts[min(len(calls) - 1, len(texts) - 1)])
+
+    return fake_run, calls
+
+
+async def test_a_mangled_call_is_asked_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    live = runtime(tmp_path)
+    fake_run, calls = replies(TANGLED, '{"steps":[{"id":"mem","op":"notes.search"}]}')
+    monkeypatch.setattr("clyde.openai.service.run", fake_run)
+    with caplog.at_level("INFO", logger="clyde"):
+        outcome = await live.complete({"messages": [{"role": "user", "content": "hi"}]})
+    assert len(calls) == 2
+    assert outcome.result == '{"steps":[{"id":"mem","op":"notes.search"}]}'
+    assert "retrying" in caplog.text
+
+
+async def test_a_clean_reply_is_not_asked_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = runtime(tmp_path)
+    fake_run, calls = replies("a perfectly ordinary answer")
+    monkeypatch.setattr("clyde.openai.service.run", fake_run)
+    outcome = await live.complete({"messages": [{"role": "user", "content": "hi"}]})
+    assert len(calls) == 1
+    assert outcome.result == "a perfectly ordinary answer"
+
+
+async def test_it_is_asked_again_once_and_not_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second failure is a fact about this request, and hiding it behind a third attempt
+    would only make it slower to find."""
+    live = runtime(tmp_path)
+    fake_run, calls = replies(TANGLED, TANGLED)
+    monkeypatch.setattr("clyde.openai.service.run", fake_run)
+    outcome = await live.complete({"messages": [{"role": "user", "content": "hi"}]})
+    assert len(calls) == 2
+    assert "correcting format" in outcome.result, "the second reply is returned as it came"

@@ -80,43 +80,78 @@ class Outcome:
         return self.subtype.startswith("error_max_turns")
 
 
-LEADING_TOOL_CALL = re.compile(
-    r"\A\s*<(?:\w+:)?(invoke|function_calls)\b[^>]*>.*?</(?:\w+:)?\1\s*>",
-    re.DOTALL | re.IGNORECASE,
+TOOL_CALL_TAG = re.compile(
+    r"\A\s*</?(?:\w+:)?(?:invoke|function_calls)\b[^>]*>\s*\Z",
+    re.IGNORECASE,
 )
-"""A tool-call block at the very front of a reply, which is where a leaked one appears.
+"""A line that is nothing but a tool-call tag, opening or closing.
 
 Claude Code is trained to emit `<invoke name="...">` when it decides to call something, and it
 does so with every tool disallowed, because a prompt full of named operations reads exactly
-like a set of tools. With no tool to match, the CLI hands the block through as part of the
-reply. Observed, twice:
+like a set of tools. With no tool to match, the CLI hands the tags through as part of the
+reply, and they have arrived wrapped around the payload as well as in front of it:
 
-    <invoke name="none">
-    </invoke>
-    {"steps":[{"id":"ls","op":"workspace.list","input":{"path":"."}}]}
+    <invoke name="none">          <invoke>
+    </invoke>                     {"steps":[...]}
+    {"steps":[...]}              </invoke>
 
-That is a perfectly good structured reply with four lines in front of it, and a caller doing
-`json.loads` on the whole thing reads it as prose. Asking the model not to, in the prompt, did
-not stop it.
+Both are a good structured reply with tags around it, and a caller doing `json.loads` on the
+whole thing reads either as prose. Matching the *tag* rather than the block is what handles
+both: an earlier version matched `<invoke>...</invoke>` and deleted everything between, which
+was right for the left-hand shape and threw the reply away in the right-hand one.
 
-Anchored at the start on purpose, and no further. A block in the middle of a reply is the model
-writing *about* the syntax -- somebody asking clyde to explain Claude Code would get exactly
-that -- and deleting it would be this harness editing an answer it was not asked to edit.
+The line has to be nothing but the tag. `Here is the syntax: <invoke name="x"></invoke>` is the
+model writing *about* it -- which is what somebody asking clyde to explain Claude Code would
+get -- and editing that would be this harness rewriting an answer it was not asked to rewrite.
 """
 
 
-def without_leading_tool_calls(text: str) -> str:
-    """`text` with any leaked tool-call blocks taken off the front.
+def without_tool_call_tags(text: str) -> str:
+    """`text` with leaked tool-call tags taken off its edges.
 
-    Returns the original whenever stripping would leave nothing: an empty reply is a worse
-    answer than a strange one, and it is indistinguishable downstream from the model saying
-    nothing at all.
+    Only the edges: a tag line in the middle is holding two halves of something apart, and
+    nothing here knows what. Returns the original whenever stripping would leave nothing --
+    an empty reply is a worse answer than a strange one, and downstream it cannot be told
+    apart from the model saying nothing at all.
     """
-    stripped = text
-    while match := LEADING_TOOL_CALL.match(stripped):
-        stripped = stripped[match.end() :]
-    stripped = stripped.strip()
+
+    def spare(line: str) -> bool:
+        """A tag on its own, or the blank line that so often comes with one."""
+        return not line.strip() or bool(TOOL_CALL_TAG.match(line))
+
+    lines = text.splitlines()
+    while lines and spare(lines[0]):
+        lines.pop(0)
+    while lines and spare(lines[-1]):
+        lines.pop()
+    stripped = "\n".join(lines).strip()
     return stripped or text
+
+
+ANY_TOOL_CALL = re.compile(r"</?(?:\w+:)?(?:invoke|function_calls|parameter)\b", re.IGNORECASE)
+"""Tool-call syntax anywhere in a reply, in any of the shapes it has arrived in."""
+
+
+def is_mangled_call(text: str) -> bool:
+    """Whether a reply is a tool call the CLI could not make.
+
+    There are no tools in this conversation -- `argv.build` disallows every one the binary
+    reported -- so a reply carrying `<invoke>` is not an answer. It is the model reaching for
+    a channel that is not there, and whatever it meant to say is in a shape no caller can
+    read. `without_tool_call_tags` recovers the two shapes where the tags are only wrapping;
+    this catches the rest, where the syntax is tangled through the text:
+
+        <parameter name="op">notes.search</parameter>
+        </invoke>
+        ```
+        Wait, correcting format: here is the JSON object.
+        {"steps":[...]}
+
+    Measured at roughly one turn in three against a real caller, so it is worth a retry
+    rather than a shrug. The cost of a false positive -- somebody asking clyde to explain
+    Claude Code's own syntax -- is one wasted call before the same answer is returned anyway.
+    """
+    return bool(ANY_TOOL_CALL.search(text))
 
 
 def parse(stdout: str) -> Outcome:
@@ -138,7 +173,7 @@ def parse(stdout: str) -> Outcome:
     models = payload.get("modelUsage")
     named = next(iter(models), "") if isinstance(models, dict) else ""
     return Outcome(
-        result=without_leading_tool_calls(str(payload.get("result") or "")),
+        result=without_tool_call_tags(str(payload.get("result") or "")),
         is_error=bool(payload.get("is_error")),
         subtype=str(payload.get("subtype") or "success"),
         stop_reason=str(payload.get("stop_reason") or "end_turn"),
@@ -202,14 +237,16 @@ async def run(
 
 
 __all__ = [
-    "LEADING_TOOL_CALL",
+    "ANY_TOOL_CALL",
     "SIGTERM_EXIT",
     "STDERR_KEPT",
+    "TOOL_CALL_TAG",
     "ClaudeFailedError",
     "ClaudeTimeoutError",
     "Outcome",
     "first_line",
+    "is_mangled_call",
     "parse",
     "run",
-    "without_leading_tool_calls",
+    "without_tool_call_tags",
 ]
