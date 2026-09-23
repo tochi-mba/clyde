@@ -36,16 +36,33 @@ class ContaminatedSandboxError(RuntimeError):
 
 
 class Sandbox:
-    """One empty directory, owned by this process for its lifetime."""
+    """One empty directory to run in, and one beside it to spill arguments into."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, scratch: Path | None = None) -> None:
         self.root = root
+        self.scratch = scratch if scratch is not None else root.parent / f"{root.name}-scratch"
+        self.scratch.mkdir(parents=True, exist_ok=True)
 
     @classmethod
     def create(cls, parent: Path | None = None) -> Sandbox:
         """A fresh empty directory under the temp root, or under `parent` in a test."""
         base = Path(tempfile.mkdtemp(prefix="clyde-", dir=parent))
         return cls(base)
+
+    def spill(self, text: str) -> str:
+        """Write `text` where a flag can point at it, and return the path.
+
+        Deliberately *beside* the working directory rather than inside it. Nothing here would
+        trip :meth:`verify` -- a system prompt is not a `CLAUDE.md` -- but the whole reason
+        that directory is empty is that Claude Code reads it, and a file full of the caller's
+        prompt is the last thing to leave lying in a directory something might read.
+        """
+        handle = tempfile.NamedTemporaryFile(  # noqa: SIM115 - closed on the next line
+            mode="w", encoding="utf-8", suffix=".txt", dir=self.scratch, delete=False
+        )
+        with handle:
+            handle.write(text)
+        return handle.name
 
     def contaminants(self) -> list[str]:
         """Names present that should not be. Empty is the only acceptable answer."""

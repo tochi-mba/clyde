@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from clyde.cli.locate import BINARY, ClaudeNotFoundError, candidates, find
+from clyde.cli.locate import BINARY, ClaudeNotFoundError, candidates, find, through_shim
 from clyde.cli.run import ClaudeFailedError, ClaudeTimeoutError
 from clyde.cli.sandbox import ContaminatedSandboxError
 from clyde.openai.errors import Problem, from_error, needs_login
@@ -124,3 +124,68 @@ def test_the_body_is_openais_error_envelope() -> None:
             "code": "invalid_request_error",
         }
     }
+
+
+# --- the Windows shim -------------------------------------------------------------------------
+#
+# What `PATH` finds on Windows is `claude.CMD`, a batch file. Spawning it spawns cmd.exe, whose
+# command line caps at 8191 characters against CreateProcess's 32767 -- and cmd reports the
+# overflow as `The command line is too long.`, which names nothing that leads back to here.
+
+
+SHIM_BODY = """@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+"%dp0%\\real.exe"   %*
+"""
+
+
+def shim(tmp_path: Path, *, body: str = SHIM_BODY, real: bool = True) -> Path:
+    path = tmp_path / "claude.cmd"
+    path.write_text(body, encoding="utf-8")
+    if real:
+        (tmp_path / "real.exe").write_text("", encoding="utf-8")
+    return path
+
+
+def test_a_shim_resolves_to_the_executable_it_calls(tmp_path: Path) -> None:
+    assert through_shim(str(shim(tmp_path))) == str(tmp_path / "real.exe")
+
+
+def test_find_returns_the_executable_rather_than_the_shim(tmp_path: Path) -> None:
+    assert find(str(shim(tmp_path))) == str(tmp_path / "real.exe")
+
+
+def test_something_that_is_not_a_shim_is_untouched(tmp_path: Path) -> None:
+    binary = tmp_path / "claude"
+    binary.write_text("", encoding="utf-8")
+    assert through_shim(str(binary)) == str(binary)
+
+
+def test_a_shim_pointing_at_nothing_is_left_alone(tmp_path: Path) -> None:
+    """Running it still works, just with cmd's shorter command line. Guessing at a path that
+    is not there would turn a slow call into no call at all."""
+    path = shim(tmp_path, real=False)
+    assert through_shim(str(path)) == str(path)
+
+
+def test_a_shim_with_no_quoted_line_is_left_alone(tmp_path: Path) -> None:
+    body = "@ECHO off\nnode whatever %*\n"
+    assert through_shim(str(shim(tmp_path, body=body))) == str(tmp_path / "claude.cmd")
+
+
+def test_an_unreadable_shim_is_left_alone(tmp_path: Path) -> None:
+    assert through_shim(str(tmp_path / "gone.cmd")) == str(tmp_path / "gone.cmd")
+
+
+def test_the_suffix_check_ignores_case(tmp_path: Path) -> None:
+    """`shutil.which` returns `claude.CMD`, upper case, on this machine."""
+    path = tmp_path / "claude.CMD"
+    path.write_text(SHIM_BODY, encoding="utf-8")
+    (tmp_path / "real.exe").write_text("", encoding="utf-8")
+    assert through_shim(str(path)) == str(tmp_path / "real.exe")

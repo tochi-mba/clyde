@@ -14,10 +14,22 @@ tool-using turn as a chat turn. Nothing errors. That is the whole failure.
 
 Conveniently the CLI's own `result` field already holds the JSON as a string when a schema was
 used, so the correct thing and the simple thing are the same thing: pass `result` through.
+
+**Streaming.** `claude -p --output-format json` returns the whole reply at once, so there is
+nothing to stream token by token. But a caller that asks for `stream: true` is not asking for
+tokens, it is asking for *this protocol*, and several hosts have no non-streaming path at all
+-- Lucy attaches a chunk projector to every turn, so it always sends `stream: true`. Refusing
+it means refusing them.
+
+So :func:`stream_chunks` delivers the same reply down the streaming shape: one delta carrying
+the text, one carrying the finish reason, one carrying usage, then `[DONE]`. It arrives in one
+piece rather than progressively, which is a real limitation and is documented as one -- but the
+caller gets its reply, assembled exactly as the dialect says it should be.
 """
 
 from __future__ import annotations
 
+import json
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -140,13 +152,49 @@ def to_completion(outcome: Outcome, *, model: str, now: float | None = None) -> 
     }
 
 
+DONE = "[DONE]"
+"""The sentinel that ends a chat-completions stream. A word, not JSON."""
+
+
+def stream_chunks(outcome: Outcome, *, model: str, now: float | None = None) -> list[str]:
+    """One reply as the `data:` lines of a stream, ending with the sentinel.
+
+    Three chunks and a sentinel, in the order the dialect specifies: the text, the finish
+    reason, the usage. A reader assembles the reply from these, so the split has to match
+    what a reader expects even though nothing here is actually incremental.
+    """
+    created = int(now if now is not None else time.time())
+    identifier = f"chatcmpl-{outcome.session_id or 'clyde'}"
+    named = outcome.model or model
+
+    def frame(payload: Mapping[str, Any]) -> str:
+        chunk = {
+            "id": identifier,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": named,
+            **payload,
+        }
+        return "data: " + json.dumps(chunk, separators=(",", ":")) + "\n\n"
+
+    text = {"role": "assistant", "content": outcome.result}
+    return [
+        frame({"choices": [{"index": 0, "delta": text}]}),
+        frame({"choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason(outcome)}]}),
+        frame({"choices": [], "usage": usage_of(outcome)}),
+        "data: " + DONE + "\n\n",
+    ]
+
+
 __all__ = [
     "CLOSING_LINE",
     "CONVERSATION_CLOSE",
     "CONVERSATION_OPEN",
+    "DONE",
     "finish_reason",
     "render",
     "schema_of",
+    "stream_chunks",
     "to_call",
     "to_completion",
     "usage_of",

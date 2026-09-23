@@ -17,7 +17,7 @@ import pytest
 
 from clyde.api.app import build_runtime, learn_tools
 from clyde.cli.locate import ClaudeNotFoundError
-from clyde.cli.run import Outcome
+from clyde.cli.run import ClaudeFailedError, Outcome
 from clyde.cli.sandbox import ContaminatedSandboxError, Sandbox
 from clyde.core.config import Settings
 from clyde.openai.service import Runtime, problem_for, tools_from_init
@@ -126,6 +126,17 @@ async def test_a_found_binary_is_probed_for_its_tools(monkeypatch: pytest.Monkey
 # --- one call through the runtime -------------------------------------------------------------
 
 
+def read(argv: Any) -> str:
+    """The spilled system prompt, read back from where the argv points."""
+    return Path(argv[argv.index("--system-prompt-file") + 1]).read_text(encoding="utf-8")
+
+
+def exists(path: str) -> bool:
+    """Synchronous on purpose: an async test asserting about a file is not doing I/O the
+    event loop cares about, and the linter is right to ask rather than to guess."""
+    return Path(path).exists()
+
+
 def runtime(tmp_path: Path, **kwargs: Any) -> Runtime:
     import asyncio
 
@@ -187,3 +198,93 @@ def test_problem_for_is_the_sentence_and_nothing_else() -> None:
 
 def test_the_model_list_is_the_cli_aliases(tmp_path: Path) -> None:
     assert runtime(tmp_path).models == ("sonnet", "opus", "haiku", "fable")
+
+
+async def test_an_oversized_call_is_fitted_and_the_move_is_written_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The only symptom of a moved schema downstream is a reply shaped wrong, so the move
+    itself has to be visible. Three failures here were diagnosed by guessing before the
+    service logged anything at all."""
+    live = runtime(tmp_path)
+    seen: dict[str, Any] = {}
+
+    async def fake_run(
+        argv: Any,
+        *,
+        stdin: str,
+        cwd: Any,
+        timeout: float,  # noqa: ASYNC109 - mirrors the signature it stands in for
+    ) -> Outcome:
+        seen.update(argv=list(argv), stdin=stdin, written=read(argv))
+        return Outcome(result="ok")
+
+    monkeypatch.setattr("clyde.openai.service.run", fake_run)
+    with caplog.at_level("INFO", logger="clyde"):
+        await live.complete(
+            {
+                "messages": [
+                    {"role": "system", "content": "s" * 40_000},
+                    {"role": "user", "content": "hi"},
+                ]
+            }
+        )
+
+    assert "--system-prompt" not in seen["argv"]
+    assert seen["written"] == "s" * 40_000
+    assert seen["stdin"] == "hi", "the conversation stays the conversation"
+    assert "system spilled" in caplog.text
+    assert "schema kept" in caplog.text
+
+
+async def test_a_spilled_system_prompt_does_not_outlive_the_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One copy of the caller's system prompt per request would otherwise pile up in temp."""
+    live = runtime(tmp_path)
+    seen: dict[str, Any] = {}
+
+    async def fake_run(
+        argv: Any,
+        *,
+        stdin: str,
+        cwd: Any,
+        timeout: float,  # noqa: ASYNC109 - mirrors the signature it stands in for
+    ) -> Outcome:
+        seen["path"] = argv[argv.index("--system-prompt-file") + 1]
+        assert exists(seen["path"]), "it must exist while the process reads it"
+        msg = "boom"
+        raise ClaudeFailedError(msg)
+
+    monkeypatch.setattr("clyde.openai.service.run", fake_run)
+    with pytest.raises(ClaudeFailedError):
+        await live.complete(
+            {
+                "messages": [
+                    {"role": "system", "content": "s" * 40_000},
+                    {"role": "user", "content": "hi"},
+                ]
+            }
+        )
+    assert not exists(seen["path"])
+
+
+async def test_a_call_that_already_fits_is_not_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A line per call would bury the one that matters."""
+    live = runtime(tmp_path)
+
+    async def fake_run(
+        argv: Any,
+        *,
+        stdin: str,
+        cwd: Any,
+        timeout: float,  # noqa: ASYNC109 - mirrors the signature it stands in for
+    ) -> Outcome:
+        return Outcome(result="ok")
+
+    monkeypatch.setattr("clyde.openai.service.run", fake_run)
+    with caplog.at_level("INFO", logger="clyde"):
+        await live.complete({"messages": [{"role": "user", "content": "hi"}]})
+    assert "fitted" not in caplog.text

@@ -9,11 +9,12 @@ crash loop; one that boots and says so on `/ready` gives them a sentence.
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from clyde import VERSION
 from clyde.cli import argv as argv_mod
@@ -21,12 +22,15 @@ from clyde.cli.locate import ClaudeNotFoundError, find
 from clyde.cli.run import ClaudeFailedError, ClaudeTimeoutError, run
 from clyde.cli.sandbox import Sandbox
 from clyde.core.config import Settings, load_settings
+from clyde.core.logs import configure as configure_logs
 from clyde.openai import translate
 from clyde.openai.errors import Problem, from_error
 from clyde.openai.service import PROBE_PROMPT, Runtime, tools_from_init
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+log = logging.getLogger("clyde")
 
 PROBE_TIMEOUT = 120.0
 """The startup probe still runs a turn, so it gets a real ceiling -- but a shorter one than a
@@ -91,6 +95,7 @@ async def build_runtime(settings: Settings) -> Runtime:
 def create_app(settings: Settings | None = None) -> FastAPI:
     """The app. `settings` is injected in tests; production reads the environment."""
     config = settings or load_settings()
+    configure_logs(config.log_level, config.log_format)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -148,12 +153,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """
         if not isinstance(body, dict):
             return Problem(400, "the body must be an object", code="invalid_request_error")
-        if body.get("stream"):
-            return Problem(
-                400,
-                "clyde does not stream yet; call again without `stream`",
-                code="streaming_unsupported",
-            )
         if body.get("tools"):
             return Problem(
                 400,
@@ -165,13 +164,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return None
 
     def as_response(problem: Problem) -> JSONResponse:
+        # Logged as well as returned. A refusal that exists only in the caller's response body
+        # is invisible to whoever runs this: three separate failures here were diagnosed by
+        # guessing, because the access log said `500` and nothing else. The message is already
+        # capped and stripped of prompt text by `run.first_line`, which is what makes it safe
+        # to write down.
+        log.warning("refused: %s %s: %s", problem.status, problem.code, problem.message)
         headers = {"Retry-After": str(problem.retry_after)} if problem.retry_after else None
         return JSONResponse(problem.body(), status_code=problem.status, headers=headers)
 
     @app.post("/v1/chat/completions")
-    async def completions(request: Request) -> JSONResponse:
+    async def completions(request: Request) -> Response:
         live = runtime()
-        body = await request.json()
+        try:
+            body = await request.json()
+        except ValueError:
+            # Unparseable input is the caller's to fix. Letting it escape turned a bad body
+            # into a 500 that read `clyde failed: JSONDecodeError`, which blames the service.
+            return as_response(
+                Problem(400, "the body is not valid JSON", code="invalid_request_error")
+            )
         refusal = refuse(body, live)
         if refusal is not None:
             return as_response(refusal)
@@ -183,9 +195,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return as_response(
                 from_error(ClaudeFailedError(outcome.result or "claude reported an error"))
             )
-        return JSONResponse(
-            translate.to_completion(outcome, model=str(body.get("model") or live.default_model))
-        )
+        model = str(body.get("model") or live.default_model)
+        if body.get("stream"):
+            # The reply already exists in full -- `claude -p` returns it at once -- so this is
+            # the same answer delivered down the streaming shape rather than progressive
+            # generation. A caller that asks for `stream: true` is asking for the protocol,
+            # and some have no other path: Lucy attaches a chunk projector to every turn, so
+            # refusing this refused Lucy entirely.
+            chunks = translate.stream_chunks(outcome, model=model)
+            return StreamingResponse(
+                iter(chunks),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            )
+        return JSONResponse(translate.to_completion(outcome, model=model))
 
     return app
 

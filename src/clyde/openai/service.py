@@ -21,7 +21,9 @@ this scales horizontally.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from clyde.cli import argv as argv_mod
@@ -33,6 +35,8 @@ if TYPE_CHECKING:
     import asyncio
 
     from clyde.cli.sandbox import Sandbox
+
+log = logging.getLogger("clyde")
 
 PROBE_PROMPT = "ok"
 """The probe still runs a turn, so it is the shortest prompt that can end one."""
@@ -89,14 +93,35 @@ class Runtime:
         if size > self.stdin_limit:
             msg = f"the conversation is {size} bytes, over the {self.stdin_limit}-byte limit"
             raise ValueError(msg)
-        self.sandbox.verify()
-        async with self.limit:
-            return await run(
-                argv_mod.build(call, binary=self.binary),
-                stdin=call.prompt,
-                cwd=self.sandbox.root,
-                timeout=self.timeout,
+        # Anything too long for a command line moves, and `fit` decides where. The sandbox
+        # supplies the one thing `fit` cannot do for itself, which is write a file.
+        fitted = argv_mod.fit(call, binary=self.binary, spill=self.sandbox.spill)
+        if fitted is not call:
+            # Worth a line every time: a moved schema changes what the model is able to
+            # return, and the only symptom downstream is a reply that is shaped wrong.
+            log.info(
+                "fitted: %d -> %d chars (schema %s, system %s)",
+                argv_mod.length(argv_mod.build(call, binary=self.binary)),
+                argv_mod.length(argv_mod.build(fitted, binary=self.binary)),
+                "moved" if fitted.json_schema is None and call.json_schema else "kept",
+                "spilled" if fitted.system_file else ("folded" if call.system else "kept"),
             )
+        self.sandbox.verify()
+        try:
+            async with self.limit:
+                return await run(
+                    argv_mod.build(fitted, binary=self.binary),
+                    stdin=fitted.prompt,
+                    cwd=self.sandbox.root,
+                    timeout=self.timeout,
+                )
+        finally:
+            # A spilled prompt lives exactly as long as the process reading it. Leaving them
+            # behind would accumulate one copy of the caller's system prompt per request.
+            # Done inline rather than on a thread: this is one unlink of one small local file,
+            # and a thread per request would cost more than the microsecond it blocks for.
+            if fitted.system_file:
+                Path(fitted.system_file).unlink(missing_ok=True)  # noqa: ASYNC240
 
 
 def problem_for(error: Exception) -> str:
