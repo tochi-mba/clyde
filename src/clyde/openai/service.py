@@ -6,10 +6,12 @@ answers about *this machine* and none of them change between calls:
 **Where `claude` is.** Looked up once; a missing binary is reported by `/ready` rather than
 discovered on the first real request.
 
-**Which tools to disallow.** Read from the CLI's own `system/init` rather than hard-coded. A
-hand-written list silently rots the moment Claude Code ships a new tool, and the cost of
-missing one was measured at $0.012 against $0.294 for the same prompt. Learning the list from
-the binary that is actually installed is the only version of this that stays true.
+**That a call loads nothing.** Every call runs under `argv.LOCKDOWN`, which removes every
+built-in tool and every MCP server by construction. At startup the CLI is run once under the
+same flags and its `system/init` is read back; unless that shows nothing loaded, every call is
+refused (:attr:`Runtime.unsafe`). This replaced a list of tool names to disallow, learned from
+a probe run *without* those flags -- and on 2026-09-24 that list let TodoWrite into real calls
+while `/ready` vouched for 157 names. `cli/argv.py` has the measurements.
 
 **One sandbox.** An empty directory, verified before every call.
 
@@ -41,13 +43,57 @@ log = logging.getLogger("clyde")
 PROBE_PROMPT = "ok"
 """The probe still runs a turn, so it is the shortest prompt that can end one."""
 
+SHOWN = 5
+"""How many names a sentence lists before it counts the rest. A CLI that ignored `--tools ""`
+would load every built-in, and a refusal naming each of them on every call would bury the log
+line after it. `/ready` lists them all."""
 
-def tools_from_init(stream: str) -> tuple[str, ...]:
-    """Every tool name `system/init` reported, from the first line of a stream-json run.
+UNPROVEN = (
+    "the startup probe did not report what a call loads, so nothing shows that calls here run "
+    "without tools; refusing them until a restart probes again"
+)
+"""What every call is refused with when the probe never ran or could not be read."""
 
-    Returns empty on anything unexpected rather than raising: an unreadable probe means the
-    harness disallows nothing by name, which is visible in `/ready` and in the first call's
-    token count -- where a crash at startup would just mean no service at all.
+
+@dataclass(frozen=True, slots=True)
+class Loaded:
+    """What a run's `system/init` said it had loaded for the model to call.
+
+    Built-in tools and MCP servers, by name: the two things `argv.LOCKDOWN` removes that a
+    model can call. Skills and slash commands are removed too, and are not counted here: a
+    model reaches a skill only through the Skill tool, which is a built-in and so already in
+    `tools`, and a slash command is something a prompt invokes, not a model.
+    """
+
+    tools: tuple[str, ...] = ()
+    mcp_servers: tuple[str, ...] = ()
+
+    @property
+    def anything(self) -> bool:
+        return bool(self.tools or self.mcp_servers)
+
+    def describe(self) -> str:
+        """What loaded, as a phrase: `tools: TodoWrite; MCP servers: claude.ai Gmail`."""
+
+        def listed(names: tuple[str, ...]) -> str:
+            rest = len(names) - SHOWN
+            shown = ", ".join(names[:SHOWN])
+            return f"{shown} and {rest} more" if rest > 0 else shown
+
+        kinds = (("tools", self.tools), ("MCP servers", self.mcp_servers))
+        return "; ".join(f"{kind}: {listed(names)}" for kind, names in kinds if names)
+
+
+def tools_from_init(stream: str) -> Loaded | None:
+    """What the `system/init` event of a stream-json run said loaded.
+
+    `None` when there is no init event to read, and deliberately not an empty :class:`Loaded`:
+    "the probe said nothing loaded" and "the probe said nothing" are different answers, and
+    the second is not evidence of anything. The disallow list this replaced collapsed them --
+    an unreadable probe meant nothing disallowed, and every call was served anyway.
+
+    Both lists have to be there. An init event with `tools` and no `mcp_servers` says nothing
+    about MCP servers, which is not the same as saying there are none.
     """
     for line in stream.splitlines():
         if not line.strip():
@@ -55,13 +101,30 @@ def tools_from_init(stream: str) -> tuple[str, ...]:
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            return ()
-        if isinstance(event, dict) and event.get("type") == "system":
-            names = event.get("tools")
-            if isinstance(names, list):
-                return tuple(str(name) for name in names)
-        return ()
-    return ()
+            return None
+        if not (
+            isinstance(event, dict)
+            and event.get("type") == "system"
+            and event.get("subtype") == "init"
+        ):
+            continue
+        tools, servers = event.get("tools"), event.get("mcp_servers")
+        if isinstance(tools, list) and isinstance(servers, list):
+            return Loaded(tools=_names(tools), mcp_servers=_names(servers))
+        return None
+    return None
+
+
+def _names(entries: list[Any]) -> tuple[str, ...]:
+    """Each entry's name: a tool is a string, an MCP server an object with a `name`.
+
+    Nothing is dropped. An entry with no readable name is still something that loaded, and
+    leaving it out would turn "something loaded" into "nothing did".
+    """
+    return tuple(
+        str(entry.get("name") or entry) if isinstance(entry, dict) else str(entry)
+        for entry in entries
+    )
 
 
 @dataclass
@@ -74,7 +137,10 @@ class Runtime:
     timeout: float
     default_model: str
     stdin_limit: int
-    disallowed: tuple[str, ...] = ()
+    loaded: Loaded | None = None
+    """What the startup probe saw load, under the flags every call runs with. `None` until a
+    probe has been read, which is the safe default: it refuses."""
+
     problem: str = ""
     """Why this is not usable, when it is not. Empty means ready."""
 
@@ -83,12 +149,37 @@ class Runtime:
     discovers what to ask for and how a catalogue row probes this service."""
 
     @property
+    def unsafe(self) -> str:
+        """Why a call here is not known to run with nothing loaded. Empty means it is.
+
+        Anything but empty refuses every call. The disallow list only ever reported its
+        failures -- an empty list was said to cost "tokens rather than correctness" -- and it
+        then failed in a way it could not report at all: a call ran with TodoWrite loaded while
+        `/ready` vouched for 157 names. A service that knows a tool is loaded and serves anyway
+        is that failure again with better logging.
+
+        A probe that could not be read refuses too. It is no evidence of a tool, but it is no
+        evidence of none either, and "no tools" is what every reply from here rests on. What
+        that costs is a restart after a probe that failed for a passing reason, and a 503 until
+        then -- which a caller reads as this provider being unavailable, and falls back from.
+        """
+        if self.loaded is None:
+            return UNPROVEN
+        if self.loaded.anything:
+            return (
+                "the startup probe loaded something under the flags every call runs with "
+                f"({self.loaded.describe()}), so every call is refused rather than handed to a "
+                "model that can reach it"
+            )
+        return ""
+
+    @property
     def ready(self) -> bool:
-        return not self.problem
+        return not self.problem and not self.unsafe
 
     async def complete(self, body: dict[str, Any]) -> Outcome:
         """One chat-completions body, one process, one outcome."""
-        call = translate.to_call(body, disallowed=self.disallowed, default_model=self.default_model)
+        call = translate.to_call(body, default_model=self.default_model)
         size = len(call.prompt.encode("utf-8"))
         if size > self.stdin_limit:
             msg = f"the conversation is {size} bytes, over the {self.stdin_limit}-byte limit"
@@ -139,4 +230,13 @@ def problem_for(error: Exception) -> str:
     return str(error)
 
 
-__all__ = ["PROBE_PROMPT", "Runtime", "locate", "problem_for", "tools_from_init"]
+__all__ = [
+    "PROBE_PROMPT",
+    "SHOWN",
+    "UNPROVEN",
+    "Loaded",
+    "Runtime",
+    "locate",
+    "problem_for",
+    "tools_from_init",
+]

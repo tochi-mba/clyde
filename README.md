@@ -15,5 +15,8 @@ It is not an agent. Every call runs with one turn, no tools, no MCP servers and 
 working directory, so the thing on the other end behaves like a model rather than like Claude
 Code. See `src/clyde/cli/argv.py` for the flags and the measurements that chose them.
 
+That is checked, not assumed: at startup the CLI runs once under the same flags, `/ready`
+reports what it loaded, and every call is refused unless that was nothing.
+
 It binds to loopback and authenticates nobody, which is the same posture as any other local
 runtime on the same machine. Do not expose the port.

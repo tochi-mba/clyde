@@ -20,12 +20,31 @@ untrusted tool results.
 `--mcp-config '{"mcpServers":{}}'` with `--strict-mcp-config` is what removes them. It is not
 an optimisation and it is not optional, which is why :func:`build` takes no flag to skip it and
 `test_argv.py` asserts it is present in every argv this module can produce.
+
+**2026-09-24: the disallow list leaked.** The last row's "0 tools" came from a list of names: a
+startup probe read them out of `system/init` and every call passed them back as
+`--disallowedTools`. That stopped being true without anything here changing. The probe ran
+with ToolSearch available, which defers some tools out of the init listing; calls disallowed
+ToolSearch, so the deferred tools came back. Measured against Claude Code 2.1.280, a real
+call's init line read `"tools":["TodoWrite"]` while `/ready` reported 157 names disallowed.
+Haiku, asked to build a website, called TodoWrite -- which spends the only turn -- and the run
+ended `error_max_turns`, or with an empty reply.
+
+A deny-list can only name what somebody saw, so it is gone rather than kept as a second layer:
+it is also what let `/ready` vouch for a lockdown that was not there. `--tools ""` removes the
+whole built-in set by construction, and `--disable-slash-commands` removes the dozens of skills
+and slash commands the same init line was offering. Replayed with both, the two requests that
+had failed each answered in one turn with a plan, and a `--json-schema` call still returned its
+structured output -- two turns and `stop_reason: tool_use`, as before, because that channel is
+the CLI's own and not one of the tools this removes. The MCP pair stays: `--tools` governs only
+the built-in set. All four flags are :data:`LOCKDOWN`, and the startup probe runs under it too,
+so what `/ready` reports is what a call loads.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -34,6 +53,35 @@ if TYPE_CHECKING:
 EMPTY_MCP = json.dumps({"mcpServers": {}}, separators=(",", ":"))
 """No MCP servers, stated positively. With `--strict-mcp-config` this replaces the account's
 own set rather than adding to it."""
+
+NO_TOOLS = ""
+"""The value of `--tools` that loads none of the built-in set.
+
+`claude --help`: 'Use "" to disable all tools'. An allow-list of nothing, where what it
+replaced was a deny-list of whatever a startup probe had seen. A list of names to refuse cannot
+refuse a name it never saw; an empty list of names to offer offers nothing, whatever a Claude
+Code release adds next.
+"""
+
+LOCKDOWN = (
+    "--tools",
+    NO_TOOLS,
+    "--disable-slash-commands",
+    # The pair that removes the account's connectors. See the module docstring.
+    "--mcp-config",
+    EMPTY_MCP,
+    "--strict-mcp-config",
+)
+"""Everything that takes away what a model could reach, as it appears in every argv.
+
+One tuple for :func:`build` and :func:`probe` rather than the same flags written twice, because
+the probe exists to show what a call loads, and a probe run under different flags shows
+something else. That is exactly how the disallow list came to leak.
+
+The order is not cosmetic. `--tools` and `--mcp-config` each take a list, and a list runs until
+the next flag, so each value here is followed by a flag. Anything placed straight after the
+empty value would be read as the name of a tool to load.
+"""
 
 SETTINGS_BLOB = json.dumps(
     {"includeCoAuthoredBy": False, "cleanupPeriodDays": 1},
@@ -75,10 +123,11 @@ SCHEMA_IN_WORDS = (
 
 The last two sentences are the whole file's most load-bearing text, and they are here rather
 than in the caller's prompt because they are about *this harness* rather than about that
-caller. Claude Code offers no tools in `-p` mode, so a caller reaching it through a schema
-like this is using JSON as its tool-call channel and prose as its answer channel. Callers that
-reach a model through a vendor SDK never need saying this: `tool_use` and `text` are different
-reply shapes there, and the provider reports which one it sent.
+caller. :data:`LOCKDOWN` makes "You have no tools in this conversation" true by construction,
+so a caller reaching Claude Code through a schema like this is using JSON as its tool-call
+channel and prose as its answer channel. Callers that reach a model through a vendor SDK never
+need saying this: `tool_use` and `text` are different reply shapes there, and the provider
+reports which one it sent.
 
 Measured. Without them, the first real caller ever pointed at clyde re-emitted the same plan
 eight rounds running, then twelve, and never answered -- because "reply with JSON only" is an
@@ -90,7 +139,7 @@ anyway, and a caller doing `json.loads` on the whole reply read that as prose.
 
 The paragraph about tool syntax is here for the same reason and is just as specific to this
 harness. Claude Code is trained to emit `<invoke name="...">` when it decides to call
-something, and it does so even with every tool disallowed, because a schema full of named
+something, and it does so even with no tool to call, because a schema full of named
 operations reads exactly like a set of tools. Observed: a reply of
 
     <invoke name="none">
@@ -121,10 +170,6 @@ class Call:
 
     model: str = ""
     json_schema: Mapping[str, object] | None = None
-    disallowed_tools: Sequence[str] = field(default_factory=tuple)
-    """Every tool name to remove. Read from `system/init` at startup rather than hard-coded:
-    a hand-written list silently rots when Claude Code adds a tool, and the cost of missing
-    one is measured above."""
 
 
 def length(argv: Sequence[str]) -> int:
@@ -195,10 +240,7 @@ def build(call: Call, *, binary: str) -> list[str]:
         PERMISSION_MODE,
         "--permission-prompts",
         "none",
-        # The pair that removes the account's connectors. See the module docstring.
-        "--mcp-config",
-        EMPTY_MCP,
-        "--strict-mcp-config",
+        *LOCKDOWN,
         "--settings",
         SETTINGS_BLOB,
     ]
@@ -208,20 +250,21 @@ def build(call: Call, *, binary: str) -> list[str]:
         argv += ["--system-prompt", call.system]
     if call.model:
         argv += ["--model", call.model]
-    if call.disallowed_tools:
-        argv += ["--disallowedTools", ",".join(call.disallowed_tools)]
     if call.json_schema is not None:
         argv += ["--json-schema", json.dumps(call.json_schema, separators=(",", ":"))]
     return argv
 
 
 def probe(binary: str) -> list[str]:
-    """The argv that asks Claude Code what it loaded, without asking a model anything.
+    """The argv that asks Claude Code what a call would load, under the flags a call runs with.
 
-    `system/init` is the first line of a `stream-json` run and reports `tools` and
-    `mcp_servers`. That list is what `Call.disallowed_tools` is filled from, so the harness
-    learns the tool names from the CLI it is actually running rather than from a constant
-    somebody updates by hand.
+    `system/init` is the first event of a `stream-json` run and reports `tools` and
+    `mcp_servers`. Under :data:`LOCKDOWN` both are empty -- measured: `"tools":[]` and
+    `"mcp_servers":[]` -- and the service checks that they are rather than assuming it.
+
+    It used to run without the lockdown, to learn names for a disallow list, and so it
+    reported what *it* loaded rather than what a call did. ToolSearch made those two different
+    sets; see the module docstring. A probe is only evidence about the flags it ran with.
     """
     return [
         binary,
@@ -235,6 +278,7 @@ def probe(binary: str) -> list[str]:
         PERMISSION_MODE,
         "--permission-prompts",
         "none",
+        *LOCKDOWN,
         "--settings",
         SETTINGS_BLOB,
     ]
@@ -243,7 +287,9 @@ def probe(binary: str) -> list[str]:
 __all__ = [
     "ARGV_CEILING",
     "EMPTY_MCP",
+    "LOCKDOWN",
     "MAX_TURNS",
+    "NO_TOOLS",
     "PERMISSION_MODE",
     "SCHEMA_IN_WORDS",
     "SETTINGS_BLOB",

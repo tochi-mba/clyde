@@ -82,7 +82,7 @@ def schema_of(response_format: Mapping[str, Any] | None) -> Mapping[str, Any] | 
     return None
 
 
-def to_call(body: dict[str, Any], *, disallowed: Sequence[str], default_model: str) -> Call:
+def to_call(body: dict[str, Any], *, default_model: str) -> Call:
     """One chat-completions body as one :class:`Call`."""
     messages = body.get("messages")
     system, prompt = render(messages if isinstance(messages, list) else [])
@@ -91,7 +91,6 @@ def to_call(body: dict[str, Any], *, disallowed: Sequence[str], default_model: s
         system=system,
         model=str(body.get("model") or default_model),
         json_schema=schema_of(body.get("response_format")),
-        disallowed_tools=tuple(disallowed),
     )
 
 

@@ -1,9 +1,10 @@
 """The three routes, and the startup that decides whether they can work.
 
 Startup does the three things that are true of the machine rather than of a request: find the
-binary, make the sandbox, and ask the installed CLI which tools it would load. None of them
-fail startup. A service that refuses to boot because `claude` is missing gives an operator a
-crash loop; one that boots and says so on `/ready` gives them a sentence.
+binary, make the sandbox, and run the installed CLI once under the flags every call runs with,
+to see that it loads nothing. None of them fail startup. A service that refuses to boot because
+`claude` is missing gives an operator a crash loop; one that boots and says so on `/ready`
+gives them a sentence -- and refuses the calls it cannot serve, with the same sentence.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from clyde.core.config import Settings, load_settings
 from clyde.core.logs import configure as configure_logs
 from clyde.openai import translate
 from clyde.openai.errors import Problem, from_error
-from clyde.openai.service import PROBE_PROMPT, Runtime, tools_from_init
+from clyde.openai.service import PROBE_PROMPT, Loaded, Runtime, tools_from_init
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -37,15 +38,17 @@ PROBE_TIMEOUT = 120.0
 request, because a machine that cannot answer `ok` in two minutes is not going to serve."""
 
 
-async def learn_tools(
+async def loaded_tools(
     binary: str,
     sandbox: Sandbox,
     timeout: float = PROBE_TIMEOUT,  # noqa: ASYNC109 - the probe kills its own child
-) -> tuple[str, ...]:
-    """Ask the installed CLI what it loads, so the disallow list matches the binary.
+) -> Loaded | None:
+    """What a call would load, found by running the CLI once under the flags every call uses.
 
-    A failure here is not fatal: the service starts with an empty list, which costs tokens
-    rather than correctness, and `/ready` reports it.
+    Expected: nothing. `None` when there was nothing to read, because a probe that hung is
+    not a probe that found nothing. Anything but an empty `Loaded` is named by `/ready` and
+    refuses every call (`Runtime.unsafe`); none of it fails startup, for the reason in the
+    module docstring.
     """
     process = await asyncio.create_subprocess_exec(
         *argv_mod.probe(binary),
@@ -61,7 +64,7 @@ async def learn_tools(
     except TimeoutError:
         process.kill()
         await process.wait()
-        return ()
+        return None
     return tools_from_init(out.decode("utf-8", "replace"))
 
 
@@ -88,7 +91,7 @@ async def build_runtime(settings: Settings) -> Runtime:
         timeout=settings.timeout_seconds,
         default_model=settings.default_model,
         stdin_limit=settings.stdin_limit_bytes,
-        disallowed=await learn_tools(binary, sandbox),
+        loaded=await loaded_tools(binary, sandbox),
     )
 
 
@@ -117,17 +120,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def ready() -> JSONResponse:
         """Whether a call would work, and why not when it would not."""
         live = runtime()
+        loaded = live.loaded
         body = {
             "status": "ok" if live.ready else "degraded",
             "version": VERSION,
             "checks": {
                 "claude": {
-                    "status": "ok" if live.ready else "degraded",
+                    "status": "degraded" if live.problem else "ok",
                     "detail": {"binary": live.binary, "reason": live.problem or None},
                 },
-                "tools_disallowed": {
-                    "status": "ok" if live.disallowed else "degraded",
-                    "detail": {"count": len(live.disallowed)},
+                # What the probe saw load under the flags every call runs with: `ok` only on
+                # proof of nothing. `null` lists mean there was no proof either way.
+                "lockdown": {
+                    "status": "degraded" if live.unsafe else "ok",
+                    "detail": {
+                        "tools": None if loaded is None else list(loaded.tools),
+                        "mcp_servers": None if loaded is None else list(loaded.mcp_servers),
+                        "reason": live.unsafe or None,
+                    },
                 },
             },
         }
@@ -148,8 +158,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def refuse(body: object, live: Runtime) -> Problem | None:
         """Why this request cannot be served, before anything is spawned.
 
-        Each of these is a 400 the caller can fix by asking differently, except the last,
-        which is this machine's fault and says so with a `Retry-After`.
+        Each of these is a 400 the caller can fix by asking differently, except the last two,
+        which are this machine's fault and say so with a `Retry-After`.
         """
         if not isinstance(body, dict):
             return Problem(400, "the body must be an object", code="invalid_request_error")
@@ -159,8 +169,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "clyde offers no tools; ask for structured output with `response_format` instead",
                 code="tools_unsupported",
             )
-        if not live.ready:
+        if live.problem:
             return Problem(503, live.problem, code="claude_not_found", retry_after=30)
+        if live.unsafe:
+            return Problem(503, live.unsafe, code="not_locked_down", retry_after=30)
         return None
 
     def as_response(problem: Problem) -> JSONResponse:
@@ -211,4 +223,4 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
-__all__ = ["PROBE_TIMEOUT", "build_runtime", "create_app", "learn_tools", "run"]
+__all__ = ["PROBE_TIMEOUT", "build_runtime", "create_app", "loaded_tools", "run"]

@@ -22,13 +22,34 @@ auth. `--bare` would also work and is the documented mode for scripted calls, bu
 reads OAuth credentials or the system keychain" — it needs an API key, which is the thing this
 exists to avoid.
 
-## The disallow list is learned, not written
+## No tools, by construction
 
-Shortening it in one experiment let the built-in tools back in: $0.012 became $0.294 for the
-same prompt. So the harness runs one `stream-json` probe at startup, reads the `tools` array
-out of `system/init`, and passes exactly that back as `--disallowedTools`. On this machine it
-learns 149 names. A Claude Code release that adds a tool cannot quietly widen what a caller's
-model can reach.
+Until 2026-09-24 the built-in tools were removed by a disallow list learned at startup.
+Shortening a hand-written list in one experiment had let them back in — $0.012 became $0.294
+for the same prompt — so the harness ran one `stream-json` probe, read the `tools` array out
+of `system/init`, and passed exactly that back as `--disallowedTools`. When it was written it
+learned 149 names.
+
+It leaked anyway. The probe ran with ToolSearch available, which defers some tools out of the
+init listing; real calls disallowed ToolSearch, so the deferred tools came back. Measured
+against `claude` 2.1.280: a real call's init line read `"tools":["TodoWrite"]` while `/ready`
+reported 157 names disallowed. Haiku, asked to build a website, called TodoWrite — which
+spends the only turn — and the run ended `error_max_turns`, or with an empty reply. A deny-list
+can only name what somebody saw.
+
+Every call now passes `--tools ""` (`claude --help`: *Use "" to disable all tools*) and
+`--disable-slash-commands` (*Disable all skills*) beside the MCP pair, which stays because
+`--tools` governs only the built-in set. Replayed with them, the two requests that had failed
+each answered in one turn with a plan, and a `--json-schema` call still returned its structured
+output. The deny-list is gone rather than kept as a second layer: it is also what let `/ready`
+vouch for a lockdown that was not there.
+
+The startup probe now runs under exactly the same flags, and its job is to show that nothing
+loads rather than to learn what to deny. Under the lockdown its init line reads `"tools":[]`
+and `"mcp_servers":[]`. `/ready`'s `lockdown` check is `ok` only on that proof. Anything else
+— a tool, a server, or an init line that could not be read — degrades it, names what loaded,
+and refuses every call with a 503 `not_locked_down`: a service that knows a tool is loaded and
+serves anyway is the situation this replaced.
 
 ## `num_turns` is not a truncation signal
 

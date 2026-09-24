@@ -71,10 +71,12 @@ class Outcome:
     denied: tuple[str, ...] = ()
     """Tools the model reached for and was refused, by name, from `permission_denials`.
 
-    Every tool is disallowed here, so a name in this list is the model trying to *do*
-    something itself -- write the file it was asked to write -- instead of answering with a
-    plan. On a weak model that is the commonest way a run ends in `error_during_execution`,
-    and it is the one fact that says what to change.
+    A name here is the model trying to *do* something itself -- write the file it was asked
+    to write -- instead of answering. While the tools were disallowed by name, that was the
+    commonest way a weak model's run ended in `error_during_execution`. With none loaded at
+    all (`argv.LOCKDOWN`) this should stay empty, so a name in it now also says that
+    something loaded which the startup probe did not see. Either way it is the one fact that
+    says what to change.
     """
 
     terminal_reason: str = ""
@@ -122,9 +124,9 @@ TOOL_CALL_TAG = re.compile(
 """A line that is nothing but a tool-call tag, opening or closing.
 
 Claude Code is trained to emit `<invoke name="...">` when it decides to call something, and it
-does so with every tool disallowed, because a prompt full of named operations reads exactly
-like a set of tools. With no tool to match, the CLI hands the tags through as part of the
-reply, and they have arrived wrapped around the payload as well as in front of it:
+does so with no tool to call, because a prompt full of named operations reads exactly like a
+set of tools. With no tool to match, the CLI hands the tags through as part of the reply, and
+they have arrived wrapped around the payload as well as in front of it:
 
     <invoke name="none">          <invoke>
     </invoke>                     {"steps":[...]}
@@ -170,11 +172,12 @@ ANY_TOOL_CALL = re.compile(r"</?(?:\w+:)?(?:invoke|function_calls|parameter)\b",
 def is_mangled_call(text: str) -> bool:
     """Whether a reply is a tool call the CLI could not make.
 
-    There are no tools in this conversation -- `argv.build` disallows every one the binary
-    reported -- so a reply carrying `<invoke>` is not an answer. It is the model reaching for
-    a channel that is not there, and whatever it meant to say is in a shape no caller can
-    read. `without_tool_call_tags` recovers the two shapes where the tags are only wrapping;
-    this catches the rest, where the syntax is tangled through the text:
+    There are no tools in this conversation -- `argv.LOCKDOWN` loads none, and the service
+    refuses to run until a probe under the same flags has shown it -- so a reply carrying
+    `<invoke>` is not an answer. It is the model reaching for a channel that is not there,
+    and whatever it meant to say is in a shape no caller can read. `without_tool_call_tags`
+    recovers the two shapes where the tags are only wrapping; this catches the rest, where
+    the syntax is tangled through the text:
 
         <parameter name="op">notes.search</parameter>
         </invoke>
