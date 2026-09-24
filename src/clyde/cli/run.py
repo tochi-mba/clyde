@@ -17,6 +17,7 @@ apart and `openai.errors` decides what each becomes on the wire.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -229,11 +230,26 @@ async def run(
     if code == SIGTERM_EXIT:
         msg = "claude was terminated before it finished"
         raise ClaudeFailedError(msg, exit_code=code)
+    stdout = out.decode("utf-8", "replace")
     if code != 0:
-        detail = first_line(err.decode("utf-8", "replace")) or "no detail on stderr"
+        # A non-zero exit does not always mean there is nothing to read. The CLI has exited 1
+        # while writing a complete `--output-format json` object to stdout, and that object
+        # says what happened -- `is_error` and `subtype` in its own words -- where the exit
+        # code only says "something". When it parses, it wins.
+        with contextlib.suppress(ClaudeFailedError):
+            return parse(stdout)
+        # Otherwise the best sentence available, wherever it is. stderr first because that is
+        # where the CLI puts what it means to say; stdout second because it is sometimes the
+        # only place anything appears, and `no detail on stderr` is a sentence about clyde
+        # rather than about what went wrong.
+        detail = (
+            first_line(err.decode("utf-8", "replace"))
+            or first_line(stdout)
+            or "nothing on stderr or stdout"
+        )
         msg = f"claude exited {code}: {detail}"
         raise ClaudeFailedError(msg, exit_code=code)
-    return parse(out.decode("utf-8", "replace"))
+    return parse(stdout)
 
 
 __all__ = [
