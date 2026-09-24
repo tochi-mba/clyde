@@ -229,6 +229,61 @@ def test_why_names_every_tool_the_model_reached_for() -> None:
     )
 
 
+# --- an empty reply is not an answer ---------------------------------------------------------
+#
+# A Haiku run whose only output was a TodoWrite call reached its caller as HTTP 200 with
+# `"content": ""` and 266 completion tokens. The CLI called it a success, clyde passed it on as
+# one, and the caller ended its turn having said nothing to the person it was talking to.
+
+EMPTY_SUCCESS_JSON = {
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "result": "",
+    "num_turns": 1,
+    "stop_reason": "tool_use",
+    "session_id": "9d41a0c3",
+    "usage": {"input_tokens": 9, "output_tokens": 266},
+    "terminal_reason": "completed",
+}
+"""A run the CLI calls a success with no text in it: the model's output was a tool call."""
+
+
+def test_a_reply_with_text_in_it_is_an_answer() -> None:
+    assert parse(json.dumps(CLI_JSON)).answered
+
+
+@pytest.mark.parametrize("result", ["", "  \n\t "], ids=["empty", "only whitespace"])
+def test_a_successful_run_with_no_text_is_not_an_answer(result: str) -> None:
+    """Whitespace too: `without_tool_call_tags` hands a blank reply back as it came, and a
+    caller shown nothing but a newline has still been shown nothing."""
+    assert not parse(json.dumps({**EMPTY_SUCCESS_JSON, "result": result})).answered
+
+
+def test_an_error_is_not_an_answer_even_with_text_in_it() -> None:
+    """The text of an error is the CLI saying what went wrong -- `Not logged in` -- and handing
+    it over as the model's reply would be worse than handing over nothing."""
+    assert not Outcome(result="Not logged in. Please run /login", is_error=True).answered
+
+
+def test_why_a_run_with_nothing_to_say_did_not_answer() -> None:
+    """`stop_reason` is what tells a model that reached for a tool apart from one that simply
+    stopped, so it is named where an error's `subtype` would be."""
+    outcome = parse(json.dumps(EMPTY_SUCCESS_JSON))
+    assert outcome.why == (
+        "the model finished after 1 turn without producing any text (stop_reason: tool_use)"
+    )
+
+
+def test_a_run_with_nothing_to_say_names_the_tool_it_reached_for_too() -> None:
+    payload = {**EMPTY_SUCCESS_JSON, "num_turns": 2, "permission_denials": [{"tool_name": "Write"}]}
+    assert parse(json.dumps(payload)).why == (
+        "the model finished after 2 turns without producing any text (stop_reason: tool_use); "
+        "it tried to use Write, which this service does not allow -- the model reached for a "
+        "tool instead of answering"
+    )
+
+
 # --- stderr ----------------------------------------------------------------------------------
 
 
