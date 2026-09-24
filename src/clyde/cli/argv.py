@@ -95,6 +95,19 @@ PERMISSION_MODE = "dontAsk"
 MAX_TURNS = 1
 """One request, one reply. This is a model, not an agent: the caller runs the loop."""
 
+STRUCTURED_MAX_TURNS = 4
+"""The turns a call with `--json-schema` may spend handing back its structured answer.
+
+That answer travels through the CLI's own structured-output tool, which costs a turn of its
+own, and a model that answers in words first is asked again. Measured 2026-09-24 on haiku,
+with a request small enough to keep its schema on the command line: allowed one turn, it
+ended `error_max_turns after 2 turns` three times in three -- and the caller heard only
+"claude answered 502"; allowed three, it answered in three every time. One more is room for
+an answer that fails the schema once. Under :data:`LOCKDOWN` there is no other tool to spend
+a turn on, so these turns can only be spent reaching the answer: it is still one request and
+one reply, and still not an agent.
+"""
+
 ARGV_CEILING = 28_000
 """How long a command line :func:`fit` will allow before it moves arguments onto stdin.
 
@@ -235,7 +248,7 @@ def build(call: Call, *, binary: str) -> list[str]:
         "--output-format",
         "json",
         "--max-turns",
-        str(MAX_TURNS),
+        str(STRUCTURED_MAX_TURNS if call.json_schema is not None else MAX_TURNS),
         "--permission-mode",
         PERMISSION_MODE,
         "--permission-prompts",
@@ -293,6 +306,7 @@ __all__ = [
     "PERMISSION_MODE",
     "SCHEMA_IN_WORDS",
     "SETTINGS_BLOB",
+    "STRUCTURED_MAX_TURNS",
     "Call",
     "build",
     "fit",

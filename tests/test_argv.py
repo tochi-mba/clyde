@@ -22,6 +22,7 @@ from clyde.cli.argv import (
     NO_TOOLS,
     PERMISSION_MODE,
     SCHEMA_IN_WORDS,
+    STRUCTURED_MAX_TURNS,
     Call,
     build,
     fit,
@@ -113,6 +114,22 @@ def test_the_fixed_flags_are_all_present() -> None:
 def test_one_turn_only() -> None:
     """More than one turn would make this an agent; the caller owns the loop."""
     assert MAX_TURNS == 1
+
+
+def test_a_structured_call_has_the_turns_its_answer_takes() -> None:
+    """The bug, named: with one turn allowed, haiku answered a `--json-schema` call in words,
+    was asked again, and the run ended `error_max_turns after 2 turns` -- every time."""
+    argv = build(Call(prompt="hi", json_schema={"type": "object"}), binary=BINARY)
+    assert pair(argv, "--max-turns") == str(STRUCTURED_MAX_TURNS)
+    assert STRUCTURED_MAX_TURNS >= 3, "measured: haiku needs three"
+
+
+def test_a_schema_moved_into_the_prompt_takes_the_one_turn_again() -> None:
+    """In words, the schema is a request the model answers in its reply: no extra round."""
+    schema = {"type": "object", "properties": {f"k{n}": {"type": "string"} for n in range(9)}}
+    fitted = fit(Call(prompt="hi", json_schema=schema), binary=BINARY, ceiling=200)
+    assert fitted.json_schema is None
+    assert pair(build(fitted, binary=BINARY), "--max-turns") == str(MAX_TURNS)
 
 
 def test_the_system_prompt_is_passed_verbatim() -> None:
