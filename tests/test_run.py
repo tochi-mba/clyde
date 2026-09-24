@@ -121,6 +121,114 @@ def test_only_running_out_of_turns_counts_as_the_limit(
     assert parse(json.dumps(payload)).hit_turn_limit is expected
 
 
+# --- saying why a run stopped ----------------------------------------------------------------
+#
+# The CLI's error results carry no `result` text. Before `Outcome.why`, a model at its usage
+# limit, a run that ran out of turns and a model that reached for a tool all reached a caller
+# as the same four words: "claude reported an error".
+
+STOPPED_JSON = {
+    "type": "result",
+    "subtype": "error_max_turns",
+    "is_error": True,
+    "num_turns": 2,
+    "stop_reason": "tool_use",
+    "session_id": "5b0c7e21",
+    "total_cost_usd": 0.0121,
+    "usage": {"input_tokens": 9, "output_tokens": 266},
+    "modelUsage": {"claude-haiku-4-5-20251001": {}},
+    "permission_denials": [
+        {
+            "tool_name": "Write",
+            "tool_use_id": "toolu_01",
+            "tool_input": {"file_path": "index.html", "content": "<!doctype html>"},
+        }
+    ],
+    "terminal_reason": "max_turns",
+}
+"""A failed run in the shape the CLI writes one: no `result` at all, `terminal_reason` beside
+`subtype`, and each refused tool call in `permission_denials` with the input it was given."""
+
+
+def test_a_failed_run_keeps_what_the_model_reached_for_and_why_it_stopped() -> None:
+    outcome = parse(json.dumps(STOPPED_JSON))
+    assert outcome.result == ""
+    assert outcome.denied == ("Write",)
+    assert outcome.terminal_reason == "max_turns"
+
+
+def test_a_run_that_says_nothing_about_either_keeps_nothing() -> None:
+    outcome = parse(json.dumps(CLI_JSON))
+    assert (outcome.denied, outcome.terminal_reason) == ((), "")
+
+
+@pytest.mark.parametrize(
+    ("denials", "expected"),
+    [
+        ({"tool_name": "Write"}, ()),
+        (["Write", 3, None], ()),
+        ([{"tool_use_id": "toolu_01"}], ()),
+        ([{"tool_name": ""}], ()),
+        ([{"tool_name": 7}], ()),
+        (
+            [{"tool_name": "Write"}, {"tool_name": "Bash"}, {"tool_name": "Write"}],
+            ("Write", "Bash"),
+        ),
+    ],
+    ids=[
+        "not a list",
+        "entries that are not objects",
+        "an entry with no name",
+        "a blank name",
+        "a name that is not a string",
+        "a tool refused twice",
+    ],
+)
+def test_each_refused_tool_is_named_once_in_the_order_it_was_reached_for(
+    denials: object, expected: tuple[str, ...]
+) -> None:
+    """Anything that is not a tool's name is dropped rather than guessed at: a sentence naming
+    `3` or `None` as the tool a model reached for would send somebody looking for it."""
+    assert parse(json.dumps({"permission_denials": denials})).denied == expected
+
+
+def test_why_is_the_sentence_a_real_run_that_ran_out_of_turns_produced() -> None:
+    """Word for word what a real Haiku run reported once this existed."""
+    outcome = Outcome(
+        result="",
+        is_error=True,
+        subtype="error_max_turns",
+        num_turns=2,
+        terminal_reason="max_turns",
+    )
+    assert outcome.why == "claude stopped with error_max_turns after 2 turns (max_turns)"
+
+
+def test_a_single_turn_with_no_terminal_reason_is_said_plainly() -> None:
+    outcome = Outcome(result="", is_error=True, subtype="error_during_execution")
+    assert outcome.why == "claude stopped with error_during_execution after 1 turn"
+
+
+def test_a_run_that_completed_does_not_say_so() -> None:
+    """`completed` is how every run ends that was not cut short, so it explains no failure."""
+    outcome = Outcome(
+        result="", is_error=True, subtype="error_during_execution", terminal_reason="completed"
+    )
+    assert outcome.why == "claude stopped with error_during_execution after 1 turn"
+
+
+def test_why_names_every_tool_the_model_reached_for() -> None:
+    """The one fact that says what to change: the model tried to *do* the thing rather than
+    answer."""
+    denials = [{"tool_name": "Write"}, {"tool_name": "Bash"}]
+    outcome = parse(json.dumps({**STOPPED_JSON, "permission_denials": denials}))
+    assert outcome.why == (
+        "claude stopped with error_max_turns after 2 turns (max_turns); it tried to use Write, "
+        "Bash, which this service does not allow -- the model reached for a tool instead of "
+        "answering"
+    )
+
+
 # --- stderr ----------------------------------------------------------------------------------
 
 
