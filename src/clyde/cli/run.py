@@ -68,6 +68,40 @@ class Outcome:
     usage: dict[str, Any] = field(default_factory=dict)
     model: str = ""
 
+    denied: tuple[str, ...] = ()
+    """Tools the model reached for and was refused, by name, from `permission_denials`.
+
+    Every tool is disallowed here, so a name in this list is the model trying to *do*
+    something itself -- write the file it was asked to write -- instead of answering with a
+    plan. On a weak model that is the commonest way a run ends in `error_during_execution`,
+    and it is the one fact that says what to change.
+    """
+
+    terminal_reason: str = ""
+    """The CLI's own word for why the run stopped (`completed`, `max_turns`, ...)."""
+
+    @property
+    def why(self) -> str:
+        """Why a failed run failed, in one sentence built from what the CLI reported.
+
+        The CLI's error results carry no `result` text, and "claude reported an error" was
+        all a caller ever heard -- for a model at its usage limit, a model that tried to use
+        a tool, and a run that ran out of turns alike. Measured after, on a real Haiku run
+        that ran out of turns: `claude stopped with error_max_turns after 2 turns (max_turns)`.
+        """
+        turns = f"{self.num_turns} turn" + ("" if self.num_turns == 1 else "s")
+        sentence = f"claude stopped with {self.subtype} after {turns}"
+        # `completed` is how every run ends that was not cut short, so it tells the reader of
+        # a failure nothing; anything else is the CLI naming what cut it short.
+        if self.terminal_reason and self.terminal_reason != "completed":
+            sentence += f" ({self.terminal_reason})"
+        if self.denied:
+            sentence += (
+                f"; it tried to use {', '.join(self.denied)}, which this service does not "
+                "allow -- the model reached for a tool instead of answering"
+            )
+        return sentence
+
     @property
     def hit_turn_limit(self) -> bool:
         """The run stopped because it ran out of turns, rather than because it finished.
@@ -183,7 +217,21 @@ def parse(stdout: str) -> Outcome:
         cost_usd=float(payload.get("total_cost_usd") or 0.0),
         usage=usage if isinstance(usage := payload.get("usage"), dict) else {},
         model=str(payload.get("model") or named),
+        denied=_denied(payload.get("permission_denials")),
+        terminal_reason=str(payload.get("terminal_reason") or ""),
     )
+
+
+def _denied(value: object) -> tuple[str, ...]:
+    """Each refused tool's name, once, in the order the model reached for them."""
+    if not isinstance(value, list):
+        return ()
+    names: list[str] = []
+    for entry in value:
+        name = entry.get("tool_name") if isinstance(entry, dict) else None
+        if isinstance(name, str) and name and name not in names:
+            names.append(name)
+    return tuple(names)
 
 
 def first_line(text: str) -> str:

@@ -192,9 +192,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except (ClaudeFailedError, ClaudeTimeoutError, ValueError, OSError) as error:
             return as_response(from_error(error))
         if outcome.is_error:
-            return as_response(
-                from_error(ClaudeFailedError(outcome.result or "claude reported an error"))
-            )
+            return as_response(from_error(ClaudeFailedError(outcome.result or outcome.why)))
         model = str(body.get("model") or live.default_model)
         if body.get("stream"):
             # The reply already exists in full -- `claude -p` returns it at once -- so this is

@@ -194,6 +194,34 @@ async def test_the_cli_reporting_its_own_error_becomes_a_failure(
     monkeypatch.setattr(live, "complete", complete)
     response = await call(live, monkeypatch)
     assert response.status_code == 502
+    assert response.json()["error"]["message"] == "something went wrong"
+
+
+async def test_an_error_with_no_text_of_its_own_says_why_the_run_stopped(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI's error results carry no `result`, and every one of them used to reach the
+    caller as "claude reported an error" -- a usage limit, a turn limit and a tool the model
+    reached for alike."""
+    live = runtime(tmp_path)
+
+    async def complete(body: dict[str, Any]) -> Outcome:
+        return Outcome(
+            result="",
+            is_error=True,
+            subtype="error_max_turns",
+            num_turns=2,
+            terminal_reason="max_turns",
+        )
+
+    monkeypatch.setattr(live, "complete", complete)
+    response = await call(live, monkeypatch)
+    assert response.status_code == 502
+    assert response.json()["error"] == {
+        "message": "claude stopped with error_max_turns after 2 turns (max_turns)",
+        "type": "claude_failed",
+        "code": "claude_failed",
+    }
 
 
 async def test_a_logged_out_cli_is_403_and_not_retried(
