@@ -285,6 +285,32 @@ async def test_an_error_with_no_text_of_its_own_says_why_the_run_stopped(
     }
 
 
+@pytest.mark.parametrize("stream", [False, True], ids=["blocking", "streaming"])
+@pytest.mark.parametrize("result", ["", "\n  \n"], ids=["empty", "only whitespace"])
+async def test_an_empty_reply_is_a_failure_the_caller_can_see(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, stream: bool, result: str
+) -> None:
+    """It used to be a 200 with `"content": ""`, and the caller ended its turn a success having
+    said nothing to anybody. Streaming and blocking are refused alike: Lucy only ever streams,
+    so a check on one path alone would have missed the caller it was for."""
+    live = runtime(tmp_path)
+
+    async def complete(body: dict[str, Any]) -> Outcome:
+        return Outcome(result=result, stop_reason="tool_use", usage={"output_tokens": 266})
+
+    monkeypatch.setattr(live, "complete", complete)
+    response = await call(live, monkeypatch, messages=[], stream=stream)
+    assert response.status_code == 502
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["error"] == {
+        "message": (
+            "the model finished after 1 turn without producing any text (stop_reason: tool_use)"
+        ),
+        "type": "claude_failed",
+        "code": "claude_failed",
+    }
+
+
 async def test_a_logged_out_cli_is_403_and_not_retried(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

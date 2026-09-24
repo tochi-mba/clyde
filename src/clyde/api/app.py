@@ -203,8 +203,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             outcome = await live.complete(body)
         except (ClaudeFailedError, ClaudeTimeoutError, ValueError, OSError) as error:
             return as_response(from_error(error))
-        if outcome.is_error:
-            return as_response(from_error(ClaudeFailedError(outcome.result or outcome.why)))
+        if not outcome.answered:
+            # An error, or a success with nothing in it: neither is a reply. Checked here,
+            # before the streaming and blocking paths part, so that neither can hand a caller
+            # an empty reply as a finished turn. The CLI's own words win when it had any.
+            message = outcome.result.strip() or outcome.why
+            return as_response(from_error(ClaudeFailedError(message)))
         model = str(body.get("model") or live.default_model)
         if body.get("stream"):
             # The reply already exists in full -- `claude -p` returns it at once -- so this is

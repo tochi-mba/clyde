@@ -83,20 +83,41 @@ class Outcome:
     """The CLI's own word for why the run stopped (`completed`, `max_turns`, ...)."""
 
     @property
-    def why(self) -> str:
-        """Why a failed run failed, in one sentence built from what the CLI reported.
+    def answered(self) -> bool:
+        """Whether there is a reply here to hand a caller: no error, and some text in it.
 
-        The CLI's error results carry no `result` text, and "claude reported an error" was
-        all a caller ever heard -- for a model at its usage limit, a model that tried to use
-        a tool, and a run that ran out of turns alike. Measured after, on a real Haiku run
-        that ran out of turns: `claude stopped with error_max_turns after 2 turns (max_turns)`.
+        An empty `result` on a run the CLI calls a success is not an answer, for the reason
+        :func:`parse` gives -- a caller cannot tell "the model said nothing" from "the harness
+        lost the answer". Measured: a Haiku run whose only output was a TodoWrite call reached
+        its caller as HTTP 200 with `"content": ""` and 266 completion tokens, and the caller
+        ended its turn a success, having said nothing to the person it was talking to.
+        """
+        return not self.is_error and bool(self.result.strip())
+
+    @property
+    def why(self) -> str:
+        """Why a run did not answer, in one sentence built from what the CLI reported.
+
+        Meaningful only when :attr:`answered` is false. The CLI's error results carry no
+        `result` text, and "claude reported an error" was all a caller ever heard -- for a
+        model at its usage limit, a model that tried to use a tool, and a run that ran out of
+        turns alike. Measured after, on a real Haiku run that ran out of turns: `claude stopped
+        with error_max_turns after 2 turns (max_turns)`. A run that succeeded with nothing to
+        say gets the same treatment, with `stop_reason` in place of an error, because that is
+        what tells a tool call apart from a model that simply stopped.
         """
         turns = f"{self.num_turns} turn" + ("" if self.num_turns == 1 else "s")
-        sentence = f"claude stopped with {self.subtype} after {turns}"
-        # `completed` is how every run ends that was not cut short, so it tells the reader of
-        # a failure nothing; anything else is the CLI naming what cut it short.
-        if self.terminal_reason and self.terminal_reason != "completed":
-            sentence += f" ({self.terminal_reason})"
+        if self.is_error:
+            sentence = f"claude stopped with {self.subtype} after {turns}"
+            # `completed` is how every run ends that was not cut short, so it tells the reader
+            # of a failure nothing; anything else is the CLI naming what cut it short.
+            if self.terminal_reason and self.terminal_reason != "completed":
+                sentence += f" ({self.terminal_reason})"
+        else:
+            sentence = (
+                f"the model finished after {turns} without producing any text "
+                f"(stop_reason: {self.stop_reason})"
+            )
         if self.denied:
             sentence += (
                 f"; it tried to use {', '.join(self.denied)}, which this service does not "
