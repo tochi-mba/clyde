@@ -69,6 +69,7 @@ def test_a_real_conversation_is_delimited_and_labelled() -> None:
     assert prompt.startswith(CONVERSATION_OPEN)
     assert '<turn role="assistant">second</turn>' in prompt
     assert prompt.endswith(CLOSING_LINE)
+    assert "last user turn" not in CLOSING_LINE, "the last user turn is often not the person"
 
 
 def test_an_assistant_only_history_is_still_wrapped() -> None:

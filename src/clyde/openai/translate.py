@@ -42,7 +42,13 @@ if TYPE_CHECKING:
 
 CONVERSATION_OPEN = "<conversation>"
 CONVERSATION_CLOSE = "</conversation>"
-CLOSING_LINE = "Reply as the assistant to the last user turn."
+CLOSING_LINE = "Write the assistant's next turn."
+"""What the flattened conversation ends with.
+
+Not "reply to the last user turn": a caller like Lucy puts tool results and a live-state block
+in user-role turns after the person's message, so on every round after the first the last user
+turn is not the person at all, and a model told to reply to it answers the harness.
+"""
 
 
 def render(messages: Sequence[dict[str, Any]]) -> tuple[str, str]:
