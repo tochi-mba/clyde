@@ -180,9 +180,9 @@ async def test_a_secret_on_stderr_does_not_reach_the_message(tmp_path: Path) -> 
     assert secret not in str(raised.value)
 
 
-async def test_a_non_zero_exit_with_silent_stderr_still_says_something(tmp_path: Path) -> None:
+async def test_a_non_zero_exit_with_nothing_anywhere_still_says_something(tmp_path: Path) -> None:
     argv = fake(tmp_path, prints("", code=3))
-    with pytest.raises(ClaudeFailedError, match="no detail on stderr"):
+    with pytest.raises(ClaudeFailedError, match="nothing on stderr or stdout"):
         await run(argv, stdin="", cwd=tmp_path, timeout=30)
 
 
@@ -268,3 +268,45 @@ def test_parse_strips_before_the_outcome_is_built() -> None:
     the two dialect paths that would otherwise each have to remember."""
     outcome = parse(json.dumps({"result": WRAPPED, "subtype": "success"}))
     assert outcome.result == '{"steps":[{"id":"mem","op":"notes.search"}]}'
+
+
+async def test_a_failure_with_a_silent_stderr_reads_stdout(tmp_path: Path) -> None:
+    """The CLI does not always put the reason on stderr. One real failure arrived with stderr
+    empty and everything worth reading on stdout, and clyde reported `no detail on stderr` --
+    a sentence about clyde rather than about what went wrong."""
+    argv = fake(tmp_path, prints("the real reason\nmore\n", code=1))
+    with pytest.raises(ClaudeFailedError, match="the real reason"):
+        await run(argv, stdin="", cwd=tmp_path, timeout=30)
+
+
+async def test_stderr_still_wins_when_there_is_something_on_it(tmp_path: Path) -> None:
+    argv = fake(tmp_path, prints("ignore me\n", code=1, stderr="the actual error\n"))
+    with pytest.raises(ClaudeFailedError, match="the actual error"):
+        await run(argv, stdin="", cwd=tmp_path, timeout=30)
+
+
+async def test_a_parseable_stdout_wins_over_a_non_zero_exit(tmp_path: Path) -> None:
+    """The CLI has exited 1 while writing a complete `--output-format json` object. That object
+    says what happened in its own words; the exit code only says "something". Discarding it
+    turned a reportable outcome into `claude exited 1: no detail on stderr`."""
+    payload = json.dumps(
+        {"result": "here is the answer", "subtype": "success", "stop_reason": "stop_sequence"}
+    )
+    outcome = await run(fake(tmp_path, prints(payload, code=1)), stdin="", cwd=tmp_path, timeout=30)
+    assert outcome.result == "here is the answer"
+    assert outcome.is_error is False
+
+
+async def test_an_error_the_cli_declares_survives_the_same_path(tmp_path: Path) -> None:
+    """`is_error` is the CLI's own verdict and reaches the caller as one, rather than being
+    flattened into the exit code."""
+    payload = json.dumps({"result": "the model refused", "is_error": True, "subtype": "error_x"})
+    outcome = await run(fake(tmp_path, prints(payload, code=1)), stdin="", cwd=tmp_path, timeout=30)
+    assert outcome.is_error is True
+    assert outcome.subtype == "error_x"
+
+
+async def test_an_unparseable_stdout_falls_back_to_the_sentence(tmp_path: Path) -> None:
+    argv = fake(tmp_path, prints("not json at all", code=1, stderr="the actual error"))
+    with pytest.raises(ClaudeFailedError, match="the actual error"):
+        await run(argv, stdin="", cwd=tmp_path, timeout=30)
