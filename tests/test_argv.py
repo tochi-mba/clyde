@@ -1,9 +1,11 @@
 """The argv is the security posture, so it is asserted flag by flag.
 
-The test that matters most is `test_the_mcp_lockdown_is_in_every_argv`. Without that pair of
-flags the account's own connectors load: measured at 34,933 input tokens against 701, and
-about 140 tools offered against none. No later test would catch it, because the service would
-still answer correctly -- expensively, and next to a live Gmail tool.
+The tests that matter most are the lockdown ones, and they assert the literal flags rather than
+`LOCKDOWN`, so that deleting a flag from the constant fails them instead of passing with it.
+Without the MCP pair the account's own connectors load: measured at 34,933 input tokens against
+701, and about 140 tools offered against none. Without `--tools ""` the built-in set comes
+back, and a model that calls one -- TodoWrite, measured -- spends its only turn and answers
+nothing. No later test would catch either, because the service would still mostly answer.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from clyde.cli.argv import (
     ARGV_CEILING,
     EMPTY_MCP,
     MAX_TURNS,
+    NO_TOOLS,
     PERMISSION_MODE,
     SCHEMA_IN_WORDS,
     Call,
@@ -34,17 +37,60 @@ def pair(argv: list[str], flag: str) -> str:
     return argv[argv.index(flag) + 1]
 
 
-def test_the_mcp_lockdown_is_in_every_argv() -> None:
+EVERY_SHAPE = [
+    Call(prompt="hi"),
+    Call(prompt="hi", system="s", model="opus"),
+    Call(prompt="hi", system_file="/var/spool/clyde-test/spilled-1.txt"),
+    Call(prompt="hi", json_schema={"type": "object"}),
+    Call(prompt="hi", system="s", model="opus", json_schema={}),
+]
+"""One call down each path through `build`: bare, with a system prompt and a model, with a
+spilled system prompt, with a schema, and with everything at once."""
+
+EVERY_ARGV = pytest.mark.parametrize(
+    "argv",
+    [build(call, binary=BINARY) for call in EVERY_SHAPE] + [probe(BINARY)],
+    ids=["bare", "system and model", "spilled system", "schema", "everything", "probe"],
+)
+"""Every argv this module can produce, the probe included: what the probe proves is only worth
+anything if it ran under the same lockdown as the calls."""
+
+
+@EVERY_ARGV
+def test_the_mcp_lockdown_is_in_every_argv(argv: list[str]) -> None:
     """The pair that removes the account's connectors. Absent, everything else still works."""
-    for call in (
-        Call(prompt="hi"),
-        Call(prompt="hi", system="s", model="opus", disallowed_tools=("Bash",)),
-        Call(prompt="hi", json_schema={"type": "object"}),
-    ):
-        argv = build(call, binary=BINARY)
-        assert "--strict-mcp-config" in argv
-        assert pair(argv, "--mcp-config") == EMPTY_MCP
-        assert json.loads(EMPTY_MCP) == {"mcpServers": {}}
+    assert "--strict-mcp-config" in argv
+    assert pair(argv, "--mcp-config") == EMPTY_MCP
+    assert json.loads(EMPTY_MCP) == {"mcpServers": {}}
+
+
+@EVERY_ARGV
+def test_every_built_in_tool_is_removed_from_every_argv(argv: list[str]) -> None:
+    """`--tools ""` is an allow-list of nothing. The deny-list it replaced could only name what a
+    probe had seen, and TodoWrite got past it into real calls."""
+    assert pair(argv, "--tools") == ""
+    assert "--disable-slash-commands" in argv
+
+
+@EVERY_ARGV
+def test_no_argv_names_a_tool_to_deny(argv: list[str]) -> None:
+    """Gone rather than kept as a second layer: a deny-list is what let `/ready` vouch for 157
+    names disallowed while TodoWrite loaded."""
+    assert "--disallowedTools" not in argv
+    assert "--disallowed-tools" not in argv
+
+
+@EVERY_ARGV
+def test_each_list_valued_flag_is_followed_by_another_flag(argv: list[str]) -> None:
+    """`--tools` and `--mcp-config` each take a list, which runs until the next flag. Anything
+    that came straight after the empty value would be read as the name of a tool to load."""
+    for flag in ("--tools", "--mcp-config"):
+        assert argv[argv.index(flag) + 2].startswith("--")
+
+
+def test_no_tools_is_the_empty_string_the_cli_documents() -> None:
+    """`claude --help`: 'Use "" to disable all tools'. `default` would load every one."""
+    assert NO_TOOLS == ""
 
 
 def test_the_prompt_never_reaches_the_argument_list() -> None:
@@ -84,15 +130,6 @@ def test_the_model_is_passed_when_named_and_omitted_when_not() -> None:
     assert "--model" not in build(Call(prompt="hi"), binary=BINARY)
 
 
-def test_disallowed_tools_are_one_comma_separated_value() -> None:
-    argv = build(Call(prompt="hi", disallowed_tools=("Bash", "Read", "Edit")), binary=BINARY)
-    assert pair(argv, "--disallowedTools") == "Bash,Read,Edit"
-
-
-def test_no_disallow_flag_when_there_is_nothing_to_disallow() -> None:
-    assert "--disallowedTools" not in build(Call(prompt="hi"), binary=BINARY)
-
-
 def test_a_json_schema_is_passed_as_compact_json() -> None:
     schema = {"type": "object", "properties": {"a": {"type": "string"}}}
     argv = build(Call(prompt="hi", json_schema=schema), binary=BINARY)
@@ -113,20 +150,33 @@ def test_an_empty_schema_is_still_a_schema() -> None:
 def test_flags_that_must_never_appear(flag: str) -> None:
     """`--bare` would drop subscription auth; the session flags would give the CLI a second
     conversation state the caller cannot see."""
-    argv = build(
-        Call(prompt="hi", system="s", model="opus", json_schema={}, disallowed_tools=("Bash",)),
-        binary=BINARY,
-    )
+    argv = build(Call(prompt="hi", system="s", model="opus", json_schema={}), binary=BINARY)
     assert flag not in argv
 
 
-def test_the_probe_asks_nothing_of_a_model_but_reports_what_loaded() -> None:
+def test_the_probe_streams_so_that_what_loaded_is_the_first_thing_it_says() -> None:
     argv = probe(BINARY)
     assert pair(argv, "--output-format") == "stream-json"
     assert "--verbose" in argv
     assert "--json-schema" not in argv
-    # No lockdown here on purpose: the probe exists to see what *would* load.
-    assert "--strict-mcp-config" not in argv
+
+
+def test_the_probe_runs_under_the_same_lockdown_as_a_call() -> None:
+    """It used to run with no lockdown at all, to see what *would* load and deny it by name.
+    What it saw was what a probe loads, which ToolSearch made different from what a call
+    loads. `EVERY_ARGV` covers the flags one by one; this is the whole run of them, unbroken
+    and in order, in both -- so the probe cannot drift from `build` by one flag either."""
+    lockdown = [
+        "--tools",
+        "",
+        "--disable-slash-commands",
+        "--mcp-config",
+        EMPTY_MCP,
+        "--strict-mcp-config",
+    ]
+    for argv in (build(Call(prompt="hi"), binary=BINARY), probe(BINARY)):
+        start = argv.index("--tools")
+        assert argv[start : start + len(lockdown)] == lockdown
 
 
 # --- fitting the command line ---------------------------------------------------------
@@ -234,12 +284,12 @@ def test_both_move_when_both_are_oversized() -> None:
 
 
 def test_a_call_that_cannot_be_shrunk_further_is_returned_anyway() -> None:
-    """Nothing is left to move: the disallow list alone is over the ceiling. Handing back an
-    argv that will fail is better than a silent truncation of the security posture."""
-    call = Call(prompt="p", disallowed_tools=("Tool" + "x" * 200,) * 200)
+    """Nothing is left to move: the model name alone is over the ceiling. Handing back an argv
+    that will fail, and say so, is better than quietly dropping something that was asked for."""
+    call = Call(prompt="p", model="m" * (ARGV_CEILING + 1))
     fitted = fit(call, binary=BINARY)
     assert length(build(fitted, binary=BINARY)) > ARGV_CEILING
-    assert fitted.disallowed_tools == call.disallowed_tools
+    assert fitted is call
 
 
 def test_length_counts_the_separators_between_arguments() -> None:
@@ -271,8 +321,8 @@ def test_the_schema_is_named_right_next_to_the_words_asking_for_it() -> None:
 
 
 def test_the_schema_in_words_forbids_tool_call_syntax() -> None:
-    """Claude Code emits `<invoke name="...">` when it decides to call something, even with
-    every tool disallowed -- a schema full of named operations reads like a set of tools. Four
-    lines of it in front of a perfectly good plan made the plan parse as nothing."""
+    """Claude Code emits `<invoke name="...">` when it decides to call something, even with no
+    tool to call -- a schema full of named operations reads like a set of tools. Four lines of
+    it in front of a perfectly good plan made the plan parse as nothing."""
     assert "<invoke>" in SCHEMA_IN_WORDS
     assert "no tools in this conversation" in SCHEMA_IN_WORDS

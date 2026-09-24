@@ -317,9 +317,9 @@ def test_the_outcome_defaults_are_the_quiet_ones() -> None:
 # --- leaked tool-call syntax ------------------------------------------------------------------
 #
 # Claude Code emits `<invoke name="...">` when it decides to call something, and does so with
-# every tool disallowed, because a prompt full of named operations reads exactly like a set of
-# tools. With no tool to match, the CLI hands the tags through as part of the reply. Both
-# shapes below came off a real run, a few turns apart.
+# no tool to call, because a prompt full of named operations reads exactly like a set of tools.
+# With no tool to match, the CLI hands the tags through as part of the reply. Both shapes below
+# came off a real run, a few turns apart.
 
 IN_FRONT = '<invoke name="none">\n</invoke>\n{"steps":[{"id":"ls","op":"workspace.list"}]}'
 WRAPPED = '<invoke>\n{"steps":[{"id":"mem","op":"notes.search"}]}\n</invoke>'

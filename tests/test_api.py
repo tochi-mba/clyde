@@ -18,7 +18,7 @@ from clyde.api.app import create_app
 from clyde.cli.run import ClaudeFailedError, ClaudeTimeoutError, Outcome
 from clyde.cli.sandbox import Sandbox
 from clyde.core.config import Settings
-from clyde.openai.service import Runtime
+from clyde.openai.service import UNPROVEN, Loaded, Runtime
 
 
 def runtime(tmp_path: Any, **kwargs: Any) -> Runtime:
@@ -29,7 +29,7 @@ def runtime(tmp_path: Any, **kwargs: Any) -> Runtime:
         "timeout": 30.0,
         "default_model": "sonnet",
         "stdin_limit": 1_000_000,
-        "disallowed": ("Bash", "Read"),
+        "loaded": Loaded(),
     }
     base.update(kwargs)
     return Runtime(**base)
@@ -38,9 +38,9 @@ def runtime(tmp_path: Any, **kwargs: Any) -> Runtime:
 async def client(live: Runtime, monkeypatch: pytest.MonkeyPatch) -> tuple[httpx.AsyncClient, Any]:
     """An app whose startup is replaced wholesale.
 
-    `build_runtime` locates a binary and then *runs* it to learn the tool list. Letting the
-    real one fire in a unit test would spawn a `claude` process per test -- slow, dependent on
-    a login, and billed to somebody. The probe has its own tests; here it is stubbed out.
+    `build_runtime` locates a binary and then *runs* it to see what it loads. Letting the real
+    one fire in a unit test would spawn a `claude` process per test -- slow, dependent on a
+    login, and billed to somebody. The probe has its own tests; here it is stubbed out.
     """
 
     async def fake_build(settings: Settings) -> Runtime:
@@ -79,12 +79,18 @@ async def test_healthy_says_nothing_about_readiness(
     assert response.json()["status"] == "ok"
 
 
-async def test_ready_is_ok_when_the_binary_was_found(
+async def test_ready_is_ok_when_the_binary_was_found_and_nothing_loaded(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     response = await call(runtime(tmp_path), monkeypatch, path="/ready")
     assert response.status_code == 200
-    assert response.json()["checks"]["claude"]["status"] == "ok"
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["checks"]["claude"]["status"] == "ok"
+    assert body["checks"]["lockdown"] == {
+        "status": "ok",
+        "detail": {"tools": [], "mcp_servers": [], "reason": None},
+    }
 
 
 async def test_ready_is_degraded_and_says_why(
@@ -92,19 +98,43 @@ async def test_ready_is_degraded_and_says_why(
 ) -> None:
     """503 with a sentence beats a crash loop when `claude` is simply not installed."""
     response = await call(
-        runtime(tmp_path, binary="", problem="could not find `claude`"), monkeypatch, path="/ready"
+        runtime(tmp_path, binary="", problem="could not find `claude`", loaded=None),
+        monkeypatch,
+        path="/ready",
     )
     assert response.status_code == 503
     assert "could not find" in response.json()["checks"]["claude"]["detail"]["reason"]
 
 
-async def test_ready_reports_an_empty_disallow_list_as_degraded(
+async def test_ready_names_whatever_the_probe_saw_load(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An empty list means the startup probe failed, which costs tokens rather than
-    correctness -- so it is worth seeing without being worth refusing over."""
-    body = (await call(runtime(tmp_path, disallowed=()), monkeypatch, path="/ready")).json()
-    assert body["checks"]["tools_disallowed"]["status"] == "degraded"
+    """The check that used to read `tools_disallowed: {count: 157}` while TodoWrite loaded. It
+    now reports what a probe under the calls' own flags saw, and it is not `ok` unless that
+    was nothing."""
+    loaded = Loaded(tools=("TodoWrite",), mcp_servers=("claude.ai Gmail",))
+    response = await call(runtime(tmp_path, loaded=loaded), monkeypatch, path="/ready")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["claude"]["status"] == "ok", "the binary is not what is wrong"
+    lockdown = body["checks"]["lockdown"]
+    assert lockdown["status"] == "degraded"
+    assert lockdown["detail"]["tools"] == ["TodoWrite"]
+    assert lockdown["detail"]["mcp_servers"] == ["claude.ai Gmail"]
+    assert "tools: TodoWrite; MCP servers: claude.ai Gmail" in lockdown["detail"]["reason"]
+
+
+async def test_ready_says_when_the_probe_could_not_be_read(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`null` rather than `[]`: an empty list would claim a proof nothing produced."""
+    response = await call(runtime(tmp_path, loaded=None), monkeypatch, path="/ready")
+    assert response.status_code == 503
+    assert response.json()["checks"]["lockdown"] == {
+        "status": "degraded",
+        "detail": {"tools": None, "mcp_servers": None, "reason": UNPROVEN},
+    }
 
 
 async def test_models_lists_the_aliases(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,11 +186,42 @@ async def test_a_non_object_body_is_refused(tmp_path: Any, monkeypatch: pytest.M
 async def test_a_call_with_no_binary_is_503_with_retry_after(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """With no binary there was no probe either; the binary is the sentence worth reading."""
     response = await call(
-        runtime(tmp_path, binary="", problem="no claude here"), monkeypatch, messages=[]
+        runtime(tmp_path, binary="", problem="no claude here", loaded=None),
+        monkeypatch,
+        messages=[],
     )
     assert response.status_code == 503
     assert response.headers["Retry-After"] == "30"
+    assert response.json()["error"]["code"] == "claude_not_found"
+
+
+@pytest.mark.parametrize(
+    ("loaded", "reason"),
+    [(Loaded(tools=("TodoWrite",)), "tools: TodoWrite"), (None, UNPROVEN)],
+    ids=["a tool loaded", "the probe could not be read"],
+)
+async def test_a_call_is_refused_unless_nothing_was_shown_to_load(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, loaded: Loaded | None, reason: str
+) -> None:
+    """A service that knows a tool is loaded and serves anyway is the failure this replaces,
+    so nothing is spawned. 503 because it is this machine and not the request: a caller falls
+    back to another provider rather than asking again differently."""
+    live = runtime(tmp_path, loaded=loaded)
+    spawned: list[dict[str, Any]] = []
+
+    async def complete(body: dict[str, Any]) -> Outcome:
+        spawned.append(body)
+        return Outcome(result="should never be seen")
+
+    monkeypatch.setattr(live, "complete", complete)
+    response = await call(live, monkeypatch)
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "30"
+    assert response.json()["error"]["code"] == "not_locked_down"
+    assert reason in response.json()["error"]["message"]
+    assert spawned == []
 
 
 # --- the happy path and the failures ------------------------------------------------------

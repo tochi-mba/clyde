@@ -115,21 +115,19 @@ def test_to_call_carries_everything_through() -> None:
             "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
             "response_format": {"type": "json_schema", "json_schema": {"schema": {"a": 1}}},
         },
-        disallowed=["Bash", "Read"],
         default_model="sonnet",
     )
     assert (call.model, call.system, call.prompt) == ("opus", "s", "u")
     assert call.json_schema == {"a": 1}
-    assert call.disallowed_tools == ("Bash", "Read")
 
 
 def test_the_default_model_is_used_when_none_is_named() -> None:
-    call = to_call({"messages": []}, disallowed=[], default_model="sonnet")
+    call = to_call({"messages": []}, default_model="sonnet")
     assert call.model == "sonnet"
 
 
 def test_a_body_with_no_messages_key_is_not_a_crash() -> None:
-    assert to_call({}, disallowed=[], default_model="sonnet").prompt.startswith(CONVERSATION_OPEN)
+    assert to_call({}, default_model="sonnet").prompt.startswith(CONVERSATION_OPEN)
 
 
 # --- mapping out ---------------------------------------------------------------------------
