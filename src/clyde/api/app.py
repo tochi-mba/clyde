@@ -1,4 +1,4 @@
-"""The three routes, and the startup that decides whether they can work.
+"""The four routes, and the startup that decides whether they can work.
 
 Startup does the three things that are true of the machine rather than of a request: find the
 binary, make the sandbox, and run the installed CLI once under the flags every call runs with,
