@@ -138,4 +138,4 @@ Nothing in `make check` spawns a real `claude`. `tests/test_contract.py` runs th
 reply parser over what clyde emits, and skips itself unless
 [LUCY-assistant](https://github.com/tochi-mba/LUCY-assistant) is checked out beside this
 repository. `make live` runs the tests marked `live`, which are for calling the real CLI; there
-are none yet, so today it reports that no tests ran and exits non-zero.
+are none yet, so today it says so and exits zero.
