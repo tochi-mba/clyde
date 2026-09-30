@@ -51,6 +51,21 @@ and `"mcp_servers":[]`. `/ready`'s `lockdown` check is `ok` only on that proof. 
 and refuses every call with a 503 `not_locked_down`: a service that knows a tool is loaded and
 serves anyway is the situation this replaced.
 
+## One turn, or four with a schema
+
+Every call passes `--max-turns 1`. This is a model, not an agent: the caller runs the loop.
+
+A call carrying `--json-schema` gets four (`STRUCTURED_MAX_TURNS`). Its answer travels through
+the CLI's own structured-output tool, which costs a turn of its own, and a model that answers
+in words first is asked again. Measured on 2026-09-24 against Haiku, with a schema small enough
+to stay on the command line: allowed one turn, it ended `error_max_turns after 2 turns` three
+times in three; allowed three, it answered in three every time. The fourth is room for one
+answer that fails the schema. Under the lockdown there is no other tool to spend a turn on, so
+it is still one request and one reply.
+
+A schema that had to move into the prompt (below) is no longer a `--json-schema` call, and keeps
+its single turn.
+
 ## `num_turns` is not a truncation signal
 
 Found by running it. A `--json-schema` call reports `num_turns: 2` and `stop_reason: tool_use`
@@ -69,3 +84,27 @@ a valid response, a happy client, and no plan — nothing errors, and the sympto
 seems worse today".
 
 `result` already holds the JSON as a string, so the correct thing and the simple thing agree.
+
+## What leaves the command line
+
+Windows caps a command line at 32,767 characters, and `CreateProcess` reports the overflow as
+`FileNotFoundError`: the same error as a missing binary, saying nothing about length. Lucy sends
+a 22,232-character system prompt and a 30,984-character plan schema, 55,716 characters together.
+So `fit` in `cli/argv.py` keeps every argv under 28,000 characters (`ARGV_CEILING`), on every
+platform so that a Linux test proves what Windows does, and moves things in order of cost:
+
+1. The system prompt goes to a file, passed as `--system-prompt-file`. The model sees the same
+   words in the same role, so this costs nothing, and it is usually enough.
+2. The schema goes into the prompt, in words (`SCHEMA_IN_WORDS`). That is a request where
+   `--json-schema` is a guarantee, but it still reaches the model.
+3. Only when there is nowhere to write a file is the system prompt folded into the
+   conversation. That one is expensive, and was measured: the turn that kept its system prompt
+   planned, ran its step and stopped after two rounds; the turn that folded the same words in
+   re-planned twelve times and died on the caller's iteration cap.
+
+The conversation itself always goes on stdin. The spilled file sits beside the empty working
+directory rather than inside it, and is deleted when the call ends.
+
+On Windows, `PATH` finds `claude.CMD`, a batch file, and running it means running `cmd.exe`,
+whose command line stops at 8,191 characters. `through_shim` in `cli/locate.py` reads the batch
+file and runs the executable it points at instead.
