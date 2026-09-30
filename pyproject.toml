@@ -63,7 +63,6 @@ ignore = ["ANN401", "TRY003"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/clyde/api/routers/*" = ["TC001", "TC002", "TC003"]
-"src/clyde/api/errors.py" = ["TC001", "TC002", "TC003"]
 # `cli/run.py` is the one module allowed to spawn a process, so it is the one module where
 # ruff's subprocess rules are answered in prose rather than by not doing it.
 "src/clyde/cli/run.py" = ["S603"]
