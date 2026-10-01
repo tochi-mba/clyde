@@ -66,6 +66,8 @@ ignore = ["ANN401", "TRY003"]
 # `cli/run.py` is the one module allowed to spawn a process, so it is the one module where
 # ruff's subprocess rules are answered in prose rather than by not doing it.
 "src/clyde/cli/run.py" = ["S603"]
+# `scripts/check_site.py` is a command-line gate; printing its findings is the point.
+"scripts/*" = ["T20"]
 "tests/**" = [
     "ARG001", "ARG002", "S101", "S105", "S106", "S107", "SLF001",
     "PLR2004", "TC001", "TC002", "TC003", "PLC0415", "S404", "S603", "S607",
@@ -82,8 +84,9 @@ convention = "google"
 
 [tool.mypy]
 python_version = "3.12"
-files = ["src", "tests"]
-mypy_path = ["src"]
+# `scripts/` holds the site checker; its test imports it as a top-level module.
+files = ["src", "tests", "scripts"]
+mypy_path = ["src", "scripts"]
 explicit_package_bases = true
 strict = true
 warn_unreachable = true
