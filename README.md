@@ -1,6 +1,6 @@
 # clyde
 
-Site: <https://tochi-mba.github.io/clyde/>
+A REX Technologies product. Site: <https://tochi-mba.github.io/clyde/>
 
 The Claude Code CLI as an OpenAI-compatible model provider on localhost.
 

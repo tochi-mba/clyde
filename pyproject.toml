@@ -5,7 +5,7 @@ description = "The Claude Code CLI as an OpenAI-compatible model provider on loc
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
-authors = [{ name = "tochi-mba" }]
+authors = [{ name = "REX Technologies" }]
 keywords = ["claude-code", "openai", "llm", "provider", "lucy"]
 classifiers = [
     "Framework :: FastAPI",
