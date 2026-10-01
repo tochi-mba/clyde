@@ -1,5 +1,7 @@
 # clyde
 
+Site: <https://tochi-mba.github.io/clyde/>
+
 The Claude Code CLI as an OpenAI-compatible model provider on localhost.
 
 Point anything that speaks `POST /v1/chat/completions` at it and the replies come from

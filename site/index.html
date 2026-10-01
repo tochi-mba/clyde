@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="clyde serves the Claude Code CLI as an OpenAI-compatible model provider on localhost. Replies come from claude -p under your own Claude Code login, with no tools, no MCP servers and no API key. A REX Technologies product.">
+<meta name="robots" content="index,follow">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#080A09">
+<meta property="og:title" content="clyde — Claude Code as a model provider on localhost — REX Technologies">
+<meta property="og:description" content="Point anything that speaks POST /v1/chat/completions at it. The replies come from claude -p running under your own login, with nothing loaded.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tochi-mba.github.io/clyde/">
+<meta name="twitter:card" content="summary">
+<link rel="canonical" href="https://tochi-mba.github.io/clyde/">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>document.documentElement.classList.replace("no-js","js");</script>
+<noscript><style>@media(max-width:760px){.site-nav{display:flex!important;position:static!important;flex-direction:column}.menu-button{display:none!important}}</style></noscript>
+<title>clyde — Claude Code as a model provider on localhost — REX Technologies</title>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="ambient ambient-one" aria-hidden="true"></div>
+<div class="ambient ambient-two" aria-hidden="true"></div>
+
+<header class="site-header">
+  <div class="container nav-wrap">
+    <a class="brand" href="#top" aria-label="clyde, by REX Technologies">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M22 9a8 8 0 1 0 0 14"/></svg></span>
+      <span class="brand-lockup"><span class="brand-company">REX Technologies</span><span class="brand-name">clyde</span></span>
+    </a>
+    <button class="menu-button" type="button" aria-expanded="false" aria-controls="site-nav"><span class="sr-only">Toggle navigation</span><span></span><span></span></button>
+    <nav id="site-nav" class="site-nav" aria-label="Primary navigation">
+      <a href="#how">How it works</a>
+      <a href="#routes">Routes</a>
+      <a href="#install">Run it</a>
+      <a href="#not">What it is not</a>
+      <a href="#docs">Docs</a>
+      <a class="nav-github" href="https://github.com/tochi-mba/clyde">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero container" id="top">
+    <div class="hero-copy">
+      <p class="eyebrow signal">Model provider · localhost only</p>
+      <h1>Claude Code as a <span>model</span>, on your own machine.</h1>
+      <p class="hero-lede">
+        clyde serves the Claude Code CLI as an OpenAI-compatible provider on localhost. Point
+        anything that speaks <code>POST /v1/chat/completions</code> at it and the replies come
+        from <code>claude -p</code> running under your own Claude Code login. No API key, no
+        tools, no MCP servers: the thing on the other end behaves like a model, not like an agent.
+      </p>
+      <div class="hero-actions">
+        <a class="button button-primary" href="#install">Run it on your machine</a>
+        <a class="button button-secondary" href="https://github.com/tochi-mba/clyde">Source on GitHub</a>
+      </div>
+      <div class="hero-meta">
+        <span>Python 3.12 or 3.13</span>
+        <span>Your Claude Code login</span>
+        <span>Binds to 127.0.0.1</span>
+        <span>MIT licensed</span>
+      </div>
+    </div>
+    <pre class="console" aria-label="A chat completion answered by clyde"><code><span class="you">$</span> uv run clyde serve --port 8127
+<span class="you">$</span> curl localhost:8127/v1/chat/completions \
+    -H 'content-type: application/json' \
+    -d '{"model":"sonnet","messages":[{"role":"user","content":"say ok"}]}'
+
+{
+  <span class="k">"object"</span>: "chat.completion",
+  <span class="k">"model"</span>: "sonnet",
+  <span class="k">"choices"</span>: [{"index": 0,
+               "message": {"role": "assistant", "content": <span class="s">"ok"</span>},
+               "finish_reason": "stop"}],
+  <span class="k">"usage"</span>: {"prompt_tokens": …, "completion_tokens": …, "total_tokens": …}
+}</code></pre>
+  </section>
+
+  <section class="trust-strip">
+    <div class="container trust-grid">
+      <div><strong>One call, one run</strong><span>Each request is one <code>claude -p</code> process, one turn.</span></div>
+      <div><strong>Nothing loads</strong><span>No tools, no MCP servers, no skills, an empty working directory.</span></div>
+      <div><strong>Proved, not assumed</strong><span>Startup probes the lockdown; <code>/ready</code> reports what it saw.</span></div>
+      <div><strong>No keys of its own</strong><span>Your signed-in CLI answers. clyde holds no credential.</span></div>
+    </div>
+  </section>
+
+  <section class="section container" id="how">
+    <div class="section-heading">
+      <p class="eyebrow signal">How it works</p>
+      <h2>One chat-completions request becomes one <code>claude -p</code> run.</h2>
+      <p>clyde is small, and most of it is there to keep one promise: the model on the other end can reach nothing. The flags are the security posture, and a test asserts each one literally.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <span class="step-number">01</span>
+        <h3>The request is translated</h3>
+        <p>System messages become the system prompt. A single user message is sent as it is; a longer conversation is rendered into one <code>&lt;conversation&gt;</code> of <code>&lt;turn role="…"&gt;</code> blocks. A request carrying <code>tools</code> is refused with a 400.</p>
+      </div>
+      <div class="step">
+        <span class="step-number">02</span>
+        <h3>The CLI runs locked down</h3>
+        <p>Every call passes <code>--tools ""</code>, <code>--disable-slash-commands</code> and an empty <code>--mcp-config</code> with <code>--strict-mcp-config</code>, in an empty working directory, with one turn. A JSON-schema call gets four, because the CLI spends turns handing a structured answer back.</p>
+      </div>
+      <div class="step">
+        <span class="step-number">03</span>
+        <h3>The reply comes back in OpenAI's shape</h3>
+        <p>The text lands in <code>choices[0].message.content</code>, structured output included, as a string. Usage carries cached tokens under <code>prompt_tokens_details</code>. An empty reply is a 502, never a finished turn.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section container" id="routes">
+    <div class="section-heading">
+      <p class="eyebrow signal">Routes</p>
+      <h2>Four routes, and nothing else listening.</h2>
+      <p>Errors use OpenAI's envelope, <code>{"error": {"message", "type", "code"}}</code>, and the message is a sentence you can act on: <code>not_logged_in</code>, <code>claude_not_found</code>, <code>not_locked_down</code>, <code>tools_unsupported</code>, <code>claude_failed</code>, <code>timeout</code>. Every refusal is also written to clyde's log.</p>
+    </div>
+    <div class="feature-grid">
+      <div class="feature-card"><span class="meta">GET /healthy</span><h3>Is the process up?</h3><p><code>{"status": "ok", "version": …}</code> whenever the process is up. It checks nothing.</p></div>
+      <div class="feature-card"><span class="meta">GET /ready</span><h3>Would a call work?</h3><p>200 when it would, otherwise 503. <code>checks.claude</code> says whether the binary was found; <code>checks.lockdown</code> lists the tools and MCP servers the startup probe saw load, and is <code>ok</code> only when both lists are empty.</p></div>
+      <div class="feature-card"><span class="meta">GET /v1/models</span><h3>Which models?</h3><p>The aliases the CLI accepts, in OpenAI's list shape: <code>sonnet</code>, <code>opus</code>, <code>haiku</code>, <code>fable</code>.</p></div>
+      <div class="feature-card"><span class="meta">POST /v1/chat/completions</span><h3>One completion</h3><p>Answered by one <code>claude -p</code> run. <code>response_format</code> with a <code>json_schema</code> asks for structured output; <code>stream: true</code> sends the same reply as server-sent events, in one piece, because the CLI returns the whole reply at once.</p></div>
+      <div class="feature-card"><span class="meta">CLYDE_*</span><h3>Configured by environment</h3><p>Host, port, the path to <code>claude</code>, the default model, a timeout, how many processes may run at once. A <code>CLYDE_*</code> name no setting declares stops startup, so a typo is a crash rather than a setting that silently did nothing.</p></div>
+      <a class="feature-card link" href="https://tochi-mba.github.io/LUCY-assistant/"><span class="meta">LUCY</span><h3>Used by the Lucy hub</h3><p>The <a href="https://tochi-mba.github.io/LUCY-assistant/">Lucy hub</a> knows clyde as its <code>clyde</code> provider at <code>http://localhost:8127/v1</code>, so Lucy can run on your own Claude Code login. clyde is built for the LUCY family but is not one of its keyring-verifying services.</p></a>
+    </div>
+  </section>
+
+  <section class="section container" id="install">
+    <div class="section-heading">
+      <p class="eyebrow signal">Run it</p>
+      <h2>A signed-in CLI, a sync, and a port.</h2>
+      <p>You need Python 3.12 or 3.13, <a href="https://docs.astral.sh/uv/">uv</a>, and the Claude Code CLI signed in. clyde uses that login and never needs an API key.</p>
+    </div>
+    <ol class="install-steps">
+      <li>Install the Claude Code CLI, then run <code>claude</code> once in a terminal and sign in.
+        <div class="command-row"><code>npm install -g @anthropic-ai/claude-code</code><button class="copy-button" type="button" data-copy="npm install -g @anthropic-ai/claude-code">Copy</button></div>
+      </li>
+      <li>Clone clyde and install it.
+        <div class="command-row"><code>git clone https://github.com/tochi-mba/clyde.git &amp;&amp; cd clyde &amp;&amp; uv sync</code><button class="copy-button" type="button" data-copy="git clone https://github.com/tochi-mba/clyde.git && cd clyde && uv sync">Copy</button></div>
+      </li>
+      <li>Serve it on loopback. Startup runs <code>claude</code> once under the same flags as every call, which takes a few seconds and at most two minutes.
+        <div class="command-row"><code>uv run clyde serve --port 8127</code><button class="copy-button" type="button" data-copy="uv run clyde serve --port 8127">Copy</button></div>
+      </li>
+      <li>Ask it something.
+        <div class="command-row"><code>curl localhost:8127/v1/chat/completions -H 'content-type: application/json' -d '{"model":"sonnet","messages":[{"role":"user","content":"say ok"}]}'</code><button class="copy-button" type="button" data-copy='curl localhost:8127/v1/chat/completions -H &#39;content-type: application/json&#39; -d &#39;{"model":"sonnet","messages":[{"role":"user","content":"say ok"}]}&#39;'>Copy</button></div>
+      </li>
+    </ol>
+    <p class="install-note">clyde looks for <code>claude</code> on <code>PATH</code>, then in the places npm usually puts a global binary. A service manager often runs with a shorter <code>PATH</code> than your shell, so set <code>CLYDE_CLAUDE_BINARY</code> when it cannot be found; a missing binary does not stop the server, <code>/ready</code> says what is wrong. The <a href="https://github.com/tochi-mba/clyde#configure-it">README</a> lists every <code>CLYDE_*</code> setting.</p>
+    <p id="copy-status" class="sr-only" aria-live="polite"></p>
+  </section>
+
+  <section class="section container" id="not">
+    <div class="section-heading">
+      <p class="eyebrow signal">What it is not</p>
+      <h2>A model, not an agent. A local runtime, not a hosted API.</h2>
+    </div>
+    <div class="faq">
+      <details open>
+        <summary>Is this a hosted API, or does it have keys of its own?</summary>
+        <p>Neither. clyde binds to loopback and authenticates nobody, which is the same posture as any other local runtime on the same machine. It holds no API key and no credential: the replies come from the Claude Code CLI you signed into, under its own login. Do not expose the port; that would hand a signed-in Claude Code to whoever finds it.</p>
+      </details>
+      <details>
+        <summary>Can the model read my files or call tools?</summary>
+        <p>No. Every call runs with no tools, no MCP servers, no skills and an empty working directory, and with one turn. That is checked, not assumed: at startup the CLI runs once under the same flags, <code>/ready</code> reports what it loaded, and every call is refused with a 503 unless that was nothing.</p>
+      </details>
+      <details>
+        <summary>Does it support OpenAI tool calling?</summary>
+        <p>No. A request carrying <code>tools</code> is refused with a 400 <code>tools_unsupported</code>. Ask for structured output through <code>response_format</code> instead; the JSON arrives as a string in <code>choices[0].message.content</code>, which is where a chat-completions client looks for it. A reply that comes back as tool-call syntax is asked for again, once.</p>
+      </details>
+      <details>
+        <summary>Does it stream token by token?</summary>
+        <p>Not today. <code>stream: true</code> sends the reply as server-sent events, one chunk with the text, one with the finish reason, one with usage, then <code>data: [DONE]</code>, but <code>claude -p</code> returns the whole reply at once, so it arrives in one piece.</p>
+      </details>
+    </div>
+  </section>
+
+  <section class="section container" id="docs">
+    <div class="section-heading">
+      <p class="eyebrow signal">Docs</p>
+      <h2>Written for the person who has to run it.</h2>
+    </div>
+    <div class="feature-grid">
+      <a class="feature-card link" href="https://github.com/tochi-mba/clyde#readme"><h3>README</h3><p>Install, run, call and configure it: every route, every error code, every <code>CLYDE_*</code> setting.</p></a>
+      <a class="feature-card link" href="https://github.com/tochi-mba/clyde/blob/main/docs/design.md"><h3>Why the flags are the flags</h3><p>The measurements that chose the lockdown: token counts, costs and the tools each configuration offered.</p></a>
+      <a class="feature-card link" href="https://github.com/tochi-mba/clyde/blob/main/AGENTS.md"><h3>Working notes</h3><p>Where things are, the invariants, the gates, and how a commit is written.</p></a>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-wrap">
+    <span>© <span id="year">2026</span> REX Technologies · clyde</span>
+    <span>Used by <a href="https://tochi-mba.github.io/LUCY-assistant/">LUCY</a>. MIT licensed.</span>
+    <span class="footer-links">
+      <a href="https://github.com/tochi-mba/clyde/commits/main">History <span aria-hidden="true">↗</span></a>
+      <a href="#top">Back to top <span aria-hidden="true">↑</span></a>
+    </span>
+  </div>
+</footer>
+<script src="app.js" defer></script>
+</body>
+</html>
