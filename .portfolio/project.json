@@ -1,0 +1,20 @@
+{
+  "$schema": "https://tochi-mba.github.io/schema/project.schema.json",
+  "slug": "clyde",
+  "name": "clyde",
+  "tagline": "The Claude Code CLI as an OpenAI-compatible model provider on localhost.",
+  "description": "Point anything that speaks POST /v1/chat/completions at it and the replies come from claude -p under your own login, with no API key. It is deliberately not an agent: every call runs with no tools, no MCP servers, no skills and an empty working directory, and that lockdown is checked at startup rather than assumed. /ready reports exactly what the probe saw load and refuses every call until it was nothing.",
+  "highlights": [
+    "OpenAI wire format: /v1/models, /v1/chat/completions, JSON schema answers",
+    "Startup probe proves the lockdown; refuses calls otherwise",
+    "Loopback only, documented as such",
+    "Design doc records the measurements that chose each CLI flag"
+  ],
+  "stack": ["Python 3.12", "FastAPI", "uv", "Claude Code"],
+  "category": "ai",
+  "family": "lucy",
+  "role": "provider",
+  "status": "active",
+  "order": 70,
+  "display": true
+}
