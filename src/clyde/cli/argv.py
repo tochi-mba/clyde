@@ -123,16 +123,18 @@ quoting the OS adds around each argument.
 """
 
 SCHEMA_IN_WORDS = (
-    "\n\nWhile you still need something you do not have, reply with one JSON object and nothing"
-    " else -- no prose around it, no code fence -- conforming to this JSON Schema. When you"
-    " have everything you need and the only thing left is to answer, write the answer as"
-    " ordinary prose instead, with no JSON in it at all. That is how a reply ends. If the"
+    "\n\nWhile anything is still to be looked up or done -- a read, or a save, write, send,"
+    " change or start -- reply with one JSON object and nothing else, with no prose around it"
+    " and no code fence, conforming to the JSON Schema at the end of this message. Only when"
+    " every step the request needs has run and its result is in the conversation, answer in"
+    " ordinary prose with no JSON in it. A prose reply ends your turn and runs nothing. If the"
     " conversation asks for your final answer as one JSON object, that object, alone, is your"
     " answer."
-    "\n\nWhatever that schema describes, it is not a set of tools you can call. You have no"
-    " tools in this conversation. Never emit tool-call syntax -- no <invoke> or"
-    " <function_calls> blocks -- and nothing at all outside the JSON object. Naming"
-    " something in the JSON is the only way it runs.\n"
+    "\n\nThe schema is not a set of tools you can call. You have no tools in this"
+    " conversation. Never emit tool-call syntax -- no <invoke> or <function_calls> blocks --"
+    " and nothing at all outside the JSON object. Naming an operation in the JSON object is"
+    " the only way anything runs."
+    "\n\nJSON Schema:\n"
 )
 """How a schema is asked for when it is too large to pass as a flag.
 
@@ -148,6 +150,14 @@ Measured. Without them, the first real caller ever pointed at clyde re-emitted t
 eight rounds running, then twelve, and never answered -- because "reply with JSON only" is an
 instruction a good model follows, forever. A schema in words is a request rather than a
 guarantee, and this is the part of the request that says when to stop making it.
+
+"While you still need something you do not have" was the first wording, and it presented
+JSON as a way to *get information* rather than as the only way to *act*: asked "remember
+that I prefer tea", a small model already had everything it needed, so it answered in prose
+-- "Got it, I've got that recorded" -- and nothing ran. Doing is named now, beside looking
+up, and so is what a prose reply costs: it ends the turn and runs nothing. The schema follows
+under its own label, because "this JSON Schema" pointed across a paragraph at an unlabelled
+blob tens of thousands of characters long.
 
 The exception is a caller that asked for its answer as an object: a helper briefed with a
 declared return. Told only "no JSON in it at all", it held two instructions that cannot both

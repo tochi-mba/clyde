@@ -322,7 +322,21 @@ def test_the_schema_in_words_says_how_to_stop_asking() -> None:
     plan eight rounds running: "reply with JSON only" is an instruction a good model follows
     forever, and the caller's loop ends only on a reply that is not JSON."""
     assert "prose" in SCHEMA_IN_WORDS
-    assert "That is how a reply ends." in SCHEMA_IN_WORDS
+    assert "A prose reply ends your turn and runs nothing." in SCHEMA_IN_WORDS
+
+
+def test_acting_is_named_beside_looking_up() -> None:
+    """The bug, named: JSON was "while you still need something you do not have", so asked to
+    remember something, a small model had all it needed, answered in prose that it had saved
+    it, and nothing ran."""
+    assert "a save, write, send, change or start" in SCHEMA_IN_WORDS
+    assert "every step the request needs has run" in SCHEMA_IN_WORDS
+
+
+def test_the_schema_arrives_under_its_own_label() -> None:
+    call = Call(prompt="do the thing", json_schema={"type": "object"})
+    fitted = fit(call, binary="claude", ceiling=1)
+    assert fitted.prompt.endswith('JSON Schema:\n{"type":"object"}')
 
 
 def test_an_answer_asked_for_as_an_object_is_allowed_to_be_one() -> None:
