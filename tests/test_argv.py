@@ -325,6 +325,13 @@ def test_the_schema_in_words_says_how_to_stop_asking() -> None:
     assert "That is how a reply ends." in SCHEMA_IN_WORDS
 
 
+def test_an_answer_asked_for_as_an_object_is_allowed_to_be_one() -> None:
+    """The bug, named: a caller that asked for its final answer as one JSON object -- a helper
+    with a declared return -- was also told by this text that an answer has "no JSON in it at
+    all". Two instructions that cannot both be kept, and nothing said which one won."""
+    assert "that object, alone, is your answer" in SCHEMA_IN_WORDS
+
+
 def test_the_schema_in_words_asks_for_no_code_fence() -> None:
     """Told once, the model fenced its JSON anyway, and a caller parsing the whole reply read
     that as prose."""

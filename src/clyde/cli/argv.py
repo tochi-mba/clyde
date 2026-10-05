@@ -126,7 +126,9 @@ SCHEMA_IN_WORDS = (
     "\n\nWhile you still need something you do not have, reply with one JSON object and nothing"
     " else -- no prose around it, no code fence -- conforming to this JSON Schema. When you"
     " have everything you need and the only thing left is to answer, write the answer as"
-    " ordinary prose instead, with no JSON in it at all. That is how a reply ends."
+    " ordinary prose instead, with no JSON in it at all. That is how a reply ends. If the"
+    " conversation asks for your final answer as one JSON object, that object, alone, is your"
+    " answer."
     "\n\nWhatever that schema describes, it is not a set of tools you can call. You have no"
     " tools in this conversation. Never emit tool-call syntax -- no <invoke> or"
     " <function_calls> blocks -- and nothing at all outside the JSON object. Naming"
@@ -146,6 +148,10 @@ Measured. Without them, the first real caller ever pointed at clyde re-emitted t
 eight rounds running, then twelve, and never answered -- because "reply with JSON only" is an
 instruction a good model follows, forever. A schema in words is a request rather than a
 guarantee, and this is the part of the request that says when to stop making it.
+
+The exception is a caller that asked for its answer as an object: a helper briefed with a
+declared return. Told only "no JSON in it at all", it held two instructions that cannot both
+be kept, and nothing said which one was the harness's and which was the caller's.
 
 The fence is asked about twice for a reason: told once, the model wrapped its JSON in ```json
 anyway, and a caller doing `json.loads` on the whole reply read that as prose.
