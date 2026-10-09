@@ -61,7 +61,9 @@ to see what a call would load. That takes a few seconds, and at most two minutes
 ### What a completion request may carry
 
 - `messages`: system messages become the system prompt. A single user message is sent as it
-  is; anything longer is rendered into one `<conversation>` of `<turn role="...">` blocks.
+  is; anything longer is rendered into one `<conversation>` of `<turn role="...">` blocks. The
+  system prompt ends with a line disowning the environment block Claude Code adds about the
+  proxy's own working directory, so no path from it reaches a sandbox command.
 - `model`: any alias the CLI accepts. When it is missing, `CLYDE_DEFAULT_MODEL`.
 - `response_format`: `{"type": "json_schema", "json_schema": {"schema": {...}}}` asks for
   structured output. The JSON arrives as a string in `choices[0].message.content`, which is

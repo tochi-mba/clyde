@@ -12,6 +12,7 @@ from clyde.openai.translate import (
     CLOSING_LINE,
     CONVERSATION_OPEN,
     DONE,
+    HOST_LINE,
     finish_reason,
     render,
     schema_of,
@@ -43,8 +44,23 @@ def test_the_system_message_is_lifted_out() -> None:
     system, prompt = render(
         [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "hi"}]
     )
-    assert system == "You are terse."
+    assert system == f"You are terse.\n\n{HOST_LINE}"
     assert prompt == "hi"
+
+
+def test_the_system_prompt_disowns_claude_codes_environment_block() -> None:
+    """The bug, named: asked where a `cd C:\\Users\\...` in a sandbox command came from, the
+    model said "the Primary working directory field in the preamble". Claude Code adds that
+    block even under `--system-prompt`; the caller's prompt cannot know, so this one says."""
+    system, _ = render(
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "x"}]
+    )
+    assert system.endswith(HOST_LINE)
+    assert "working directory" in HOST_LINE
+    assert "not you" in HOST_LINE
+    assert render([{"role": "user", "content": "x"}])[0] == "", (
+        "no system prompt, nothing to add to"
+    )
 
 
 def test_several_system_messages_join() -> None:
@@ -55,7 +71,7 @@ def test_several_system_messages_join() -> None:
             {"role": "user", "content": "hi"},
         ]
     )
-    assert system == "One.\n\nTwo."
+    assert system == f"One.\n\nTwo.\n\n{HOST_LINE}"
 
 
 def test_a_real_conversation_is_delimited_and_labelled() -> None:
@@ -166,7 +182,7 @@ def test_to_call_carries_everything_through() -> None:
         },
         default_model="sonnet",
     )
-    assert (call.model, call.system, call.prompt) == ("opus", "s", "u")
+    assert (call.model, call.system, call.prompt) == ("opus", f"s\n\n{HOST_LINE}", "u")
     assert call.json_schema == {"a": 1}
 
 

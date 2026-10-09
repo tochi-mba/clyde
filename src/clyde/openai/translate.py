@@ -44,6 +44,19 @@ if TYPE_CHECKING:
 CONVERSATION_OPEN = "<conversation>"
 CONVERSATION_CLOSE = "</conversation>"
 CLOSING_LINE = "Write the assistant's next turn."
+HOST_LINE = (
+    "Claude Code adds an environment block about this process -- a working directory, a "
+    "platform, a shell. It describes the proxy this runs inside, not you: you have no working "
+    "directory, drive or shell of your own here, and no path from that block is yours to use."
+)
+"""What every system prompt ends with.
+
+Even with `--system-prompt` replacing its own, Claude Code tells the model where it is
+running: the proxy's temp folder on the operator's machine, with the operator's username in
+the path. A model that believes it has a host working directory writes `cd C:\\Users\\...`
+into a sandbox command, and the person's real path reaches a model that should never have
+seen it. The block cannot be removed from here; it can be disowned.
+"""
 """What the flattened conversation ends with.
 
 Not "reply to the last user turn": a caller like Lucy puts tool results and a live-state block
@@ -82,6 +95,8 @@ def render(messages: Sequence[dict[str, Any]]) -> tuple[str, str]:
     system = "\n\n".join(
         str(m.get("content") or "") for m in messages if m.get("role") == "system"
     ).strip()
+    if system:
+        system = f"{system}\n\n{HOST_LINE}"
     rest = [m for m in messages if m.get("role") != "system"]
 
     if len(rest) == 1 and rest[0].get("role") == "user":
