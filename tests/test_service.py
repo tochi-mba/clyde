@@ -24,6 +24,7 @@ from clyde.cli.run import ClaudeFailedError, Outcome
 from clyde.cli.sandbox import ContaminatedSandboxError, Sandbox
 from clyde.core.config import Settings
 from clyde.openai.service import UNPROVEN, Loaded, Runtime, problem_for, tools_from_init
+from clyde.openai.translate import HOST_LINE
 
 LOCKED_INIT: dict[str, Any] = {
     "type": "system",
@@ -372,7 +373,7 @@ async def test_an_oversized_call_is_fitted_and_the_move_is_written_down(
         )
 
     assert "--system-prompt" not in seen["argv"]
-    assert seen["written"] == "s" * 40_000
+    assert seen["written"] == f"{'s' * 40_000}\n\n{HOST_LINE}"
     assert seen["stdin"] == "hi", "the conversation stays the conversation"
     assert "system spilled" in caplog.text
     assert "schema kept" in caplog.text
